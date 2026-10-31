@@ -91,6 +91,7 @@ export class LlamaPanel {
         dirPath: profile.dirPath,
         version: profile.version,
         build: profile.build,
+        backend: profile.backend,
       })),
       activeProfileId: state.activeProfileId,
       modelPath: this.modelPath,
@@ -301,6 +302,7 @@ export class LlamaPanel {
       dirPath: path.dirname(execPath),
       version: info.version,
       build: info.build,
+      backend: info.backend,
     });
 
     this.deps.logger.info(
@@ -401,12 +403,24 @@ function parseParams(input: unknown): LlamaParams {
   const source = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>;
   const pick = (key: keyof LlamaParams): string =>
     typeof source[key] === 'string' ? (source[key] as string) : '';
+
+  const rawMode = pick('gpuMode');
+  const gpuMode: LlamaParams['gpuMode'] =
+    rawMode === 'on' || rawMode === 'off' ? rawMode : 'auto';
+
+  const rawSplit = pick('splitMode');
+  const splitMode: LlamaParams['splitMode'] =
+    rawSplit === 'none' || rawSplit === 'layer' || rawSplit === 'row' ? rawSplit : '';
+
   return {
     prompt: pick('prompt'),
+    gpuMode,
+    gpuLayers: pick('gpuLayers'),
+    splitMode,
+    tensorSplit: pick('tensorSplit'),
     nPredict: pick('nPredict'),
     ctxSize: pick('ctxSize'),
     threads: pick('threads'),
-    gpuLayers: pick('gpuLayers'),
     temperature: pick('temperature'),
     batchSize: pick('batchSize'),
     seed: pick('seed'),

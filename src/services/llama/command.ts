@@ -5,13 +5,25 @@
  * 规则：**输入为空 = 不传这个参数**（不是传空字符串）。
  */
 
+/** GPU 加速：auto 只在填了层数时传 -ngl；on 一定开（默认 99 层）；off 一定关（-ngl 0） */
+export type GpuMode = 'auto' | 'on' | 'off';
+
+/** 多卡切片方式，空串表示不传 */
+export type SplitMode = '' | 'none' | 'layer' | 'row';
+
 export interface LlamaParams {
   /** 提示词，空 = 不传 -p（llama-cli 进入对话模式） */
   prompt: string;
+  gpuMode: GpuMode;
+  /** GPU 层数，配合 gpuMode 使用 */
+  gpuLayers: string;
+  /** 多卡切片：--split-mode */
+  splitMode: SplitMode;
+  /** 张量分配比例：-ts，例如 "3,1" */
+  tensorSplit: string;
   nPredict: string;
   ctxSize: string;
   threads: string;
-  gpuLayers: string;
   temperature: string;
   batchSize: string;
   seed: string;
@@ -21,21 +33,29 @@ export interface LlamaParams {
 
 export const DEFAULT_PARAMS: LlamaParams = {
   prompt: '',
+  gpuMode: 'auto',
+  gpuLayers: '',
+  splitMode: '',
+  tensorSplit: '',
   nPredict: '',
   ctxSize: '',
   threads: '',
-  gpuLayers: '',
   temperature: '',
   batchSize: '',
   seed: '',
   extra: '',
 };
 
+/** 启用 GPU 但没填层数时用的默认值：尽量把层都放到显存里 */
+export const DEFAULT_GPU_LAYERS = '99';
+
+const SPLIT_MODES: readonly string[] = ['', 'none', 'layer', 'row'];
+const GPU_MODES: readonly string[] = ['auto', 'on', 'off'];
+
 const NUMERIC_FLAGS: ReadonlyArray<readonly [keyof LlamaParams, string]> = [
   ['nPredict', '-n'],
   ['ctxSize', '-c'],
   ['threads', '-t'],
-  ['gpuLayers', '-ngl'],
   ['temperature', '--temp'],
   ['batchSize', '-b'],
   ['seed', '-s'],
@@ -45,13 +65,14 @@ const NUMERIC_LABELS: Readonly<Record<string, string>> = {
   nPredict: '预测长度 -n',
   ctxSize: '上下文 -c',
   threads: '线程数 -t',
-  gpuLayers: 'GPU 层数 -ngl',
   temperature: '温度 --temp',
   batchSize: '批大小 -b',
   seed: '随机种子 -s',
 };
 
 const NUMBER_RE = /^-?\d+(?:\.\d+)?$/;
+/** 逗号分隔的正数，例如 "3,1" 或 "1,1,1" */
+const TENSOR_SPLIT_RE = /^\d+(?:\.\d+)?(?:,\d+(?:\.\d+)?)*$/;
 
 export interface LlamaTarget {
   execPath: string;
@@ -67,6 +88,24 @@ export function validateParams(target: Partial<LlamaTarget>, params: LlamaParams
   if (!target.modelPath) {
     problems.push('还没有选择模型（.gguf）');
   }
+
+  if (!GPU_MODES.includes(params.gpuMode)) {
+    problems.push(`GPU 模式 "${params.gpuMode}" 不合法，应为 auto / on / off`);
+  }
+  if (!SPLIT_MODES.includes(params.splitMode)) {
+    problems.push(`切片方式 "${params.splitMode}" 不合法，应为 none / layer / row`);
+  }
+
+  const layers = params.gpuLayers.trim();
+  if (layers !== '' && !NUMBER_RE.test(layers)) {
+    problems.push(`GPU 层数 -ngl 需要是数字，当前是 "${layers}"`);
+  }
+
+  const split = params.tensorSplit.trim();
+  if (split !== '' && !TENSOR_SPLIT_RE.test(split)) {
+    problems.push(`张量分配 -ts 需要形如 "3,1" 的正数序列，当前是 "${split}"`);
+  }
+
   for (const [field] of NUMERIC_FLAGS) {
     const raw = params[field].trim();
     if (raw !== '' && !NUMBER_RE.test(raw)) {
@@ -81,6 +120,24 @@ export function buildArgs(target: LlamaTarget, params: LlamaParams): string[] {
 
   if (params.prompt.trim() !== '') {
     args.push('-p', params.prompt);
+  }
+
+  // GPU 加速：off 强制 -ngl 0（纯 CPU），on 一定带层数，auto 只在填了层数时生效
+  const layers = params.gpuLayers.trim();
+  if (params.gpuMode === 'off') {
+    args.push('-ngl', '0');
+  } else if (params.gpuMode === 'on') {
+    args.push('-ngl', layers !== '' ? layers : DEFAULT_GPU_LAYERS);
+  } else if (layers !== '') {
+    args.push('-ngl', layers);
+  }
+
+  // 多卡切片
+  if (params.splitMode !== '') {
+    args.push('--split-mode', params.splitMode);
+  }
+  if (params.tensorSplit.trim() !== '') {
+    args.push('-ts', params.tensorSplit.trim());
   }
 
   for (const [field, flag] of NUMERIC_FLAGS) {
