@@ -1,0 +1,17 @@
+# 开发用文件，不进安装包
+.vscode/**
+src/**
+out/test/**
+**/*.map
+**/*.ts
+*.vsix
+.gitignore
+.git/**
+tsconfig.json
+package-lock.json
+node_modules/**
+
+# 文档与仓库元数据（README 与 LICENSE 由 vsce 单独处理）
+.github/**
+docs/**
+CONTRIBUTING.md

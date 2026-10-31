@@ -1,0 +1,96 @@
+{
+  "name": "syscomtool",
+  "displayName": "SysComTool",
+  "description": "proj59 辅助工具集：把多个自定义小功能集成到 VS Code 的一个面板里",
+  "version": "0.1.0",
+  "publisher": "xuzhaotenfang",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xuzhaotenfang/SysComTool.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "syscomtool",
+    "toolkit",
+    "llama.cpp",
+    "competition"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "syscomtool.list",
+        "title": "打开功能面板",
+        "category": "SysComTool"
+      },
+      {
+        "command": "syscomtool.hello",
+        "title": "打个招呼",
+        "category": "SysComTool"
+      },
+      {
+        "command": "syscomtool.showLog",
+        "title": "查看日志",
+        "category": "SysComTool"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "syscomtool",
+          "title": "SysComTool",
+          "icon": "media/syscomtool.svg"
+        }
+      ]
+    },
+    "views": {
+      "syscomtool": [
+        {
+          "id": "syscomtool.features",
+          "name": "功能",
+          "icon": "media/syscomtool.svg"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "syscomtool.showLog",
+          "when": "view == syscomtool.features",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "SysComTool",
+      "properties": {
+        "syscomtool.hello.greeting": {
+          "type": "string",
+          "default": "世界",
+          "description": "示例功能「打个招呼」使用的问候对象"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "check": "tsc --noEmit -p ./",
+    "test": "npm run compile && node --test \"out/test/**/*.test.js\"",
+    "package": "vsce package --no-dependencies",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.2.0",
+    "typescript": "^5.7.0"
+  }
+}
