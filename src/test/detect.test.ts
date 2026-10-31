@@ -40,3 +40,10 @@ test('选项名字带上版本号', () => {
   assert.equal(profileName('C:\\llama\\bin\\llama-cli.exe', '4615'), 'llama-cli.exe (4615)');
   assert.equal(profileName('C:\\llama\\bin\\main.exe'), 'main.exe');
 });
+
+test('两种路径分隔符都认（跨平台）', () => {
+  assert.equal(profileName('/opt/llama/llama-cli', '4615'), 'llama-cli (4615)');
+  assert.ok(isExecutableName('C:\\llama\\bin\\llama-cli.exe'));
+  assert.ok(isExecutableName('/opt/llama/bin/llama-server'));
+  assert.ok(!isExecutableName('/opt/llama/llama-cli.so'));
+});

@@ -27,11 +27,27 @@ const SKIP_DIRS = new Set([
 ]);
 
 export function isExecutableName(fileName: string): boolean {
-  const ext = path.extname(fileName).toLowerCase();
+  const base = baseName(fileName);
+  const dot = base.lastIndexOf('.');
+  const ext = dot > 0 ? base.slice(dot).toLowerCase() : '';
   if (ext !== '' && ext !== '.exe') {
     return false;
   }
-  return BUILD_NAMES.has(path.basename(fileName, ext).toLowerCase());
+  return BUILD_NAMES.has((dot > 0 ? base.slice(0, dot) : base).toLowerCase());
+}
+
+/**
+ * 取文件名 / 目录名：同时认 `/` 和 `\`。
+ * `path.basename` 只认当前平台的分隔符，处理用户粘贴的另一平台路径会出错。
+ */
+export function baseName(value: string): string {
+  const index = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'));
+  return index >= 0 ? value.slice(index + 1) : value;
+}
+
+export function dirName(value: string): string {
+  const index = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'));
+  return index > 0 ? value.slice(0, index) : '';
 }
 
 export interface VersionInfo {
@@ -155,11 +171,11 @@ export function scanFolder(folder: string): Promise<string[]> {
 }
 
 export function profileName(execPath: string, version?: string): string {
-  const base = path.basename(execPath);
+  const base = baseName(execPath);
   return version ? `${base} (${version})` : base;
 }
 
 export function isLikelyLlamaCppDir(dir: string): boolean {
-  const name = path.basename(dir).toLowerCase();
+  const name = baseName(dir).toLowerCase();
   return name === 'llama.cpp' || name === 'llama-cpp' || name === 'llamacpp';
 }
