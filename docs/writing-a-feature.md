@@ -1,7 +1,7 @@
 # 加一个功能
 
-目标：10 分钟内让 `SysComTool: Ping 一下` 出现在面板和命令面板里。
-可直接对照的现成例子：`src/features/hello.ts`。
+目标：10 分钟内让 `SysComTool: Ping 一下` 出现在右侧栏（分组 + 可搜索）和命令面板里。
+现成例子：`src/features/hello.ts`、`src/features/llama.ts`。
 
 ## 第 1 步：新建功能文件
 
@@ -12,8 +12,9 @@ import * as vscode from 'vscode';
 import type { Feature } from '../core/types';
 
 export const pingFeature: Feature = {
-  id: 'syscomtool.ping',                       // 命令 id，同时也是面板项的 id
+  id: 'syscomtool.ping',                 // 命令 id，也是侧边栏项的 id
   title: 'Ping 一下',
+  category: '通用',                      // 右侧栏的分组标题
   description: '确认外部依赖是否可达',
   async run(ctx) {
     ctx.logger.info('ping 开始');
@@ -27,19 +28,19 @@ export const pingFeature: Feature = {
 `src/features/index.ts`：
 
 ```ts
-import { helloFeature } from './hello';
-import { pingFeature } from './ping';        // 新增
-import type { Feature } from '../core/types';
-
-export const FEATURES: readonly Feature[] = [
-  helloFeature,
-  pingFeature,                               // 新增
-];
+export function createFeatures(deps: FeatureDeps): Feature[] {
+  return [
+    helloFeature,
+    createLlamaFeature(deps.panel),
+    pingFeature,                       // 新增
+    createUpdateFeature(/* ... */),
+  ];
+}
 ```
 
-## 第 3 步：在 package.json 里声明命令
+## 第 3 步：在 package.json 声明命令
 
-不声明的话，功能只在侧边栏出现，**命令面板里搜不到**：
+不声明的话，右侧栏能看到，**命令面板里搜不到**：
 
 ```jsonc
 "contributes": {
@@ -71,83 +72,76 @@ export const FEATURES: readonly Feature[] = [
 const timeout = ctx.getConfig('ping.timeout', 3);   // 注意不带 "syscomtool." 前缀
 ```
 
-## 第 5 步：跑起来
+## 第 5 步：需要共享依赖时注入
+
+功能如果需要面板、任务队列这类对象，写成工厂函数，由 `createFeatures(deps)` 传入，
+**不要在功能文件里 import `extension.ts`**（会成环，也没法单测）：
+
+```ts
+// src/features/memtrace.ts
+export function createMemtraceFeature(runs: RunManager): Feature {
+  return { id: 'syscomtool.memtrace', title: '内存采样', category: '评测', run: () => { /* 用 runs 起任务 */ } };
+}
+```
+
+## 第 6 步：跑起来
 
 ```powershell
 npm run check
 npm test
 ```
 
-然后在 VS Code 里按 `F5` 启动扩展开发宿主，在新窗口里验证面板和命令面板都出现了。
-改代码时用 `npm run watch`，宿主窗口 `Ctrl+R` 重载。
+按 `F5` 启动扩展开发宿主，确认：右侧栏有这一项、搜索能搜到、点了能执行、日志有记录。
 
 ## 约定
 
 | 项 | 约定 |
 | --- | --- |
 | `id` | `syscomtool.<name>`，全小写，可多级：`syscomtool.mem.trace` |
+| `category` | 简短名词，同一批功能用同一个：`通用`、`llama`、`评测` |
 | 文件名 | 小写短横线：`mem-trace.ts` |
-| 标题 | 动词短语，短，能独立看懂：`跑一次采样`，不要 `功能一` |
+| 标题 | 动词短语，能独立看懂：`跑一次采样`，不要 `功能一` |
 | 输出 | `ctx.logger.info/warn/error/debug`，不用 `console.log` |
-| 用户可见结果 | 成功用通知或面板结果，失败用 `showErrorMessage` 并写清「怎么办」 |
-| 错误 | 直接 `throw new Error('...')`，宿主会统一转成日志 + 提示 |
-| 依赖 | 只有本功能用的第三方包，在 PR 里说明必要性；能不加就不加 |
+| 错误 | 直接 `throw new Error('...')`，宿主统一转成日志 + 提示；不要 `process.exit` |
+| 依赖 | 只有本功能用的第三方包，PR 里说明必要性 |
 
-## 常见写法
+## 并发：别把别人堵住
 
-**长任务 + 进度**
+功能之间是独立 dispatch 的，但**别在 `run()` 里做同步长阻塞**，否则会卡住整个扩展宿主。三种做法：
+
+**短任务 + 进度**（30 秒以内）
 
 ```ts
 await vscode.window.withProgress(
   { location: vscode.ProgressLocation.Notification, title: '采样中', cancellable: true },
   async (progress, token) => {
     for (let i = 0; i < 10 && !token.isCancellationRequested; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await new Promise((r) => setTimeout(r, 200));
       progress.report({ increment: 10, message: `${i + 1}/10` });
     }
   },
 );
 ```
 
-**调用外部程序（跑 benchmark、llama.cpp）**
+**长任务且要并行**：接 `RunManager`（`deps.runs`），它已经处理了队列、上限、输出、终止，
+并且任务生命周期与视图解耦。参考 `src/services/llama/runs.ts`。
 
-```ts
-import { spawn } from 'node:child_process';
+**长时间交互**：开终端，让命令跑在终端里（`createTerminal` + `sendText`），
+用户能自己 Ctrl+C，扩展这边不留状态。
 
-async function runCommand(ctx: FeatureContext, command: string, args: string[]): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { shell: true });
-    child.stdout.on('data', (chunk: Buffer) => ctx.logger.info(chunk.toString().trim()));
-    child.stderr.on('data', (chunk: Buffer) => ctx.logger.warn(chunk.toString().trim()));
-    child.on('error', reject);
-    child.on('close', (code) => resolve(code ?? 1));
-  });
-}
-```
+## 要做界面的话
 
-**要用户输入**
-
-```ts
-const target = await vscode.window.showInputBox({ prompt: '目标地址', placeHolder: '127.0.0.1:8080' });
-if (!target) {
-  return;   // 用户取消，静默返回，不要当错误
-}
-```
-
-**在终端里跑（保留交互）**
-
-```ts
-const terminal = vscode.window.createTerminal('llama.cpp');
-terminal.show();
-terminal.sendText('./build/bin/llama-cli -m model.gguf -p "你好"');
-```
+- 需要「搜索 + 分组」这类列表：参考 `views/sidebarHtml.ts`（webview，前端过滤）；
+- 需要表单 + 长任务：参考 `views/llamaPanel.ts` + `views/llamaHtml.ts`；
+- 两条硬规则：**CSP 带 nonce**、**只用 `textContent` 渲染用户数据**（不拼 HTML）。
 
 ## 检查单
 
-- [ ] `src/features/<name>.ts` 已建，导出 `Feature`
-- [ ] 已加入 `src/features/index.ts` 的 `FEATURES`
+- [ ] `src/features/<name>.ts` 已建，导出 `Feature`（或工厂函数）
+- [ ] 已加入 `createFeatures()`
 - [ ] `package.json` 的 `contributes.commands` 有同 id 的命令
-- [ ] 新配置项在 `contributes.configuration` 里声明过
+- [ ] 新配置项在 `contributes.configuration` 里声明
+- [ ] 有纯逻辑就补单测（`src/test/*.test.ts`）
 - [ ] `npm run check`、`npm test` 通过
-- [ ] F5 的宿主窗口里：面板能点、命令面板能搜到、日志有输出
+- [ ] F5 宿主里：侧边栏分组正确、搜索能命中、执行有日志
 - [ ] `npm run package` 后 `npx vsce ls --tree` 里没有多余文件

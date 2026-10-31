@@ -1,8 +1,8 @@
 {
   "name": "syscomtool",
   "displayName": "SysComTool",
-  "description": "proj59 辅助工具集：把多个自定义小功能集成到 VS Code 的一个面板里",
-  "version": "0.1.0",
+  "description": "proj59 辅助工具集：右侧栏搜索功能，内置图形化 llama.cpp 运行器",
+  "version": "0.2.0",
   "publisher": "xuzhaotenfang",
   "license": "MIT",
   "repository": {
@@ -22,7 +22,9 @@
     "competition"
   ],
   "main": "./out/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "commands": [
       {
@@ -31,13 +33,23 @@
         "category": "SysComTool"
       },
       {
-        "command": "syscomtool.hello",
-        "title": "打个招呼",
+        "command": "syscomtool.llama",
+        "title": "图形化 llama.cpp",
+        "category": "SysComTool"
+      },
+      {
+        "command": "syscomtool.checkUpdate",
+        "title": "检查更新",
         "category": "SysComTool"
       },
       {
         "command": "syscomtool.showLog",
         "title": "查看日志",
+        "category": "SysComTool"
+      },
+      {
+        "command": "syscomtool.hello",
+        "title": "打个招呼",
         "category": "SysComTool"
       }
     ],
@@ -53,9 +65,9 @@
     "views": {
       "syscomtool": [
         {
+          "type": "webview",
           "id": "syscomtool.features",
-          "name": "功能",
-          "icon": "media/syscomtool.svg"
+          "name": "功能"
         }
       ]
     },
@@ -75,12 +87,38 @@
           "type": "string",
           "default": "世界",
           "description": "示例功能「打个招呼」使用的问候对象"
+        },
+        "syscomtool.llama.maxConcurrent": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 16,
+          "description": "同时运行多少个 llama.cpp 任务，超出的进入排队"
+        },
+        "syscomtool.llama.searchPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "「自动搜索」额外扫描的目录（工作区之外的 llama.cpp 放这里）"
+        },
+        "syscomtool.update.checkOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "启动时检查新版本（最多每 24 小时一次）"
+        },
+        "syscomtool.update.feedUrl": {
+          "type": "string",
+          "default": "https://api.github.com/repos/xuzhaotenfang/SysComTool/releases/latest",
+          "description": "检查更新用的 Release 接口地址"
         }
       }
     }
   },
   "scripts": {
-    "compile": "tsc -p ./",
+    "clean": "node -e \"require('node:fs').rmSync('out',{recursive:true,force:true})\"",
+    "compile": "npm run clean && tsc -p ./",
     "watch": "tsc -w -p ./",
     "check": "tsc --noEmit -p ./",
     "test": "npm run compile && node --test \"out/test/**/*.test.js\"",
