@@ -10,6 +10,7 @@ import type { Feature } from '../core/types';
 export const helloFeature: Feature = {
   id: 'syscomtool.hello',
   title: '打个招呼',
+  category: '通用',
   description: '示例功能：读取设置里的问候对象并弹一条消息。复制它就能开始写新功能。',
   requires: [],
   async run(ctx): Promise<void> {
