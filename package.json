@@ -2,7 +2,7 @@
   "name": "syscomtool",
   "displayName": "SysComTool",
   "description": "proj59 辅助工具集：右侧栏搜索功能，内置图形化 llama.cpp 运行器",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "xuzhaotenfang",
   "license": "MIT",
   "repository": {

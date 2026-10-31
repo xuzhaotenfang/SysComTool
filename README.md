@@ -22,7 +22,7 @@ llama.cpp 那个功能可以同时跑多个任务，关掉面板也不会中断�
 ```powershell
 npm install
 npm run package
-code --install-extension syscomtool-0.2.0.vsix --force
+code --install-extension syscomtool-0.2.1.vsix --force
 ```
 
 之后**不用再手动装**：仓库里打了 `v*` 标签时，

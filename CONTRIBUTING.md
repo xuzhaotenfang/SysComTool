@@ -75,7 +75,7 @@ git push -u origin feat/memtrace-panel
 - TypeScript `strict`，不用 `any` 兜底；确要逃逸时写注释说明原因；
 - `core/`、`services/*/command.ts`、`services/*/check.ts`、`services/store.ts` 不 import `vscode`
   （或只用 `import type`），保证能在纯 Node 里单测；
-- 命名：命令 id 小写点分 `syscomtool.<name>`，文件名小写短横线；
+- 命名：命令 id 形如 `syscomtool.<name>`（段内可 camelCase，如 `syscomtool.checkUpdate`），文件名小写短横线；
 - 注释与用户可见文案用中文，标识符用英文；
 - 功能里不要 `console.log`，统一 `ctx.logger`；
 - 不阻塞：`run()` 里避免同步长任务，用 `withProgress` / `RunManager` / 终端。

@@ -79,6 +79,20 @@ test('非法 id 记为失败且不注册', () => {
   assert.equal(handlers.size, 0);
 });
 
+test('段内 camelCase 的 id 合法（与 VS Code 命令习惯一致）', () => {
+  const { ctx } = makeContext();
+  const { api } = makeApi();
+  const host = new FeatureHost(api, ctx);
+
+  const report = host.registerAll([
+    feature('syscomtool.checkUpdate', () => undefined),
+    feature('syscomtool.mem.trace', () => undefined),
+  ]);
+
+  assert.deepEqual(report.registered, ['syscomtool.checkUpdate', 'syscomtool.mem.trace']);
+  assert.deepEqual(report.failed, []);
+});
+
 test('重复 id 只注册第一个', () => {
   const { ctx } = makeContext();
   const { api } = makeApi();
