@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npm run check
+
+      - name: 单元测试
+        run: npm test
+
+      - name: 打包 VSIX
+        run: npx vsce package --no-dependencies
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: syscomtool-vsix
+          path: "*.vsix"
+          if-no-files-found: error
