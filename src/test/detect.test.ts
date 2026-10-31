@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isExecutableName, parseVersionOutput, profileName } from '../services/llama/detect';
+import {
+  isExecutableName,
+  parseBackend,
+  parseVersionOutput,
+  profileName,
+} from '../services/llama/detect';
 
 test('解析 llama.cpp 的 --version 输出', () => {
   const info = parseVersionOutput(
@@ -10,6 +15,23 @@ test('解析 llama.cpp 的 --version 输出', () => {
   assert.equal(info.version, '4615');
   assert.equal(info.build, 'MSVC 19.40.33813.0 for x64');
   assert.ok(info.raw.includes('4615'));
+});
+
+test('认出 GPU 后端', () => {
+  const cuda = parseVersionOutput('version: 4615 (6d1c3e1)\nbuilt with CUDA 12.4');
+  assert.equal(cuda.backend, 'CUDA');
+
+  const vulkan = parseVersionOutput('version: 4615\nVulkan: found 3 devices');
+  assert.equal(vulkan.backend, 'Vulkan');
+
+  const cpu = parseVersionOutput('version: 4615 (6d1c3e1)\nbuilt with MSVC for x64');
+  assert.equal(cpu.backend, undefined);
+});
+
+test('parseBackend 大小写不敏感', () => {
+  assert.equal(parseBackend('METAL backend enabled'), 'Metal');
+  assert.equal(parseBackend('hip 6.1'), 'HIP');
+  assert.equal(parseBackend('nothing here'), undefined);
 });
 
 test('只有版本行时，用括号里的哈希当构建号', () => {

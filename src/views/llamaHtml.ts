@@ -9,6 +9,7 @@ export interface LlamaPanelState {
     dirPath: string;
     version?: string;
     build?: string;
+    backend?: string;
   }>;
   activeProfileId?: string;
   modelPath: string;
@@ -119,14 +120,38 @@ select { margin-bottom: 6px; }
     <label class="wide"><span>提示词 <code>-p</code></span>
       <textarea id="prompt" rows="3" placeholder="留空则不传 -p（llama-cli 会进入对话模式）"></textarea>
     </label>
+    <label><span>GPU 加速 <code>-ngl</code></span>
+      <select id="gpuMode">
+        <option value="auto">自动（填了层数才传）</option>
+        <option value="on">启用加速</option>
+        <option value="off">禁用加速（-ngl 0，纯 CPU）</option>
+      </select>
+    </label>
+    <label><span>GPU 层数 <code>-ngl</code></span>
+      <input id="gpuLayers" placeholder="启用时留空 = 99" />
+    </label>
+    <label><span>多卡切片 <code>--split-mode</code></span>
+      <select id="splitMode">
+        <option value="">不传（跟随构建默认）</option>
+        <option value="none">none · 不切片</option>
+        <option value="layer">layer · 按层切</option>
+        <option value="row">row · 按行切</option>
+      </select>
+    </label>
+    <label><span>张量分配 <code>-ts</code></span>
+      <input id="tensorSplit" placeholder='例如 3,1（留空 = 不传）' />
+    </label>
     <label><span>预测长度 <code>-n</code></span><input id="nPredict" placeholder="—" /></label>
     <label><span>上下文 <code>-c</code></span><input id="ctxSize" placeholder="—" /></label>
     <label><span>线程数 <code>-t</code></span><input id="threads" placeholder="—" /></label>
-    <label><span>GPU 层数 <code>-ngl</code></span><input id="gpuLayers" placeholder="—" /></label>
     <label><span>温度 <code>--temp</code></span><input id="temperature" placeholder="—" /></label>
     <label><span>批大小 <code>-b</code></span><input id="batchSize" placeholder="—" /></label>
     <label><span>随机种子 <code>-s</code></span><input id="seed" placeholder="—" /></label>
     <label class="wide"><span>额外参数</span><input id="extra" placeholder='例如 --no-warmup 或 --foo "a b"' /></label>
+  </div>
+  <div class="meta" style="margin-top: 8px">
+    多卡切片只在多 GPU 构建上生效；<code>-ts</code> 用逗号分隔各卡比例，例如 <code>3,1</code>。
+    禁用加速时会显式传 <code>-ngl 0</code>，层数输入被忽略。
   </div>
 </section>
 
@@ -171,8 +196,8 @@ const STATUS_TEXT = {
 };
 
 const PARAM_FIELDS = [
-  'prompt', 'nPredict', 'ctxSize', 'threads',
-  'gpuLayers', 'temperature', 'batchSize', 'seed', 'extra',
+  'prompt', 'gpuMode', 'gpuLayers', 'splitMode', 'tensorSplit',
+  'nPredict', 'ctxSize', 'threads', 'temperature', 'batchSize', 'seed', 'extra',
 ];
 
 function collectParams() {
@@ -209,6 +234,7 @@ function renderProfiles() {
     const parts = [active.execPath];
     if (active.version) parts.unshift('版本 ' + active.version);
     if (active.build) parts.push('构建 ' + active.build);
+    parts.push(active.backend ? 'GPU 后端 ' + active.backend : '未识别到 GPU 后端（可能是纯 CPU 构建）');
     $('profileMeta').textContent = parts.join(' · ');
   }
 }

@@ -1,6 +1,6 @@
 # SysComTool
 
-> 一个 VS Code 扩展：右侧栏按归属分组、可搜索的功能入口，外加一个图形化的 llama.cpp 运行器。
+> 一个 VS Code 扩展：左侧栏按归属分组、可搜索的功能入口，外加一个图形化的 llama.cpp 运行器。
 
 装好之后活动栏多一个图标，点开就是功能列表；每个功能是独立文件、独立命令，互不 import。
 llama.cpp 那个功能可以同时跑多个任务，关掉面板也不会中断。
@@ -9,7 +9,7 @@ llama.cpp 那个功能可以同时跑多个任务，关掉面板也不会中断�
 
 | 能力 | 说明 |
 | --- | --- |
-| 右侧栏功能面板 | 搜索框按名字/说明过滤，功能按 `category` 分组；点一项即执行 |
+| 左侧栏功能面板 | 搜索框按名字/说明过滤，功能按 `category` 分组；点一项即执行 |
 | 图形化 llama.cpp | 自动搜索/手动指定编译好的 llama.cpp，识别版本并存为「选项」；选模型、填参数、预览命令、复制、在终端跑、在面板里跑 |
 | 多任务并行 | 运行有并发上限（默认 3），超出的排队；每个任务独立输出、独立终止 |
 | 自动更新 | 启动时静默检查 GitHub Releases（24 小时节流），也可随时手动「检查更新」 |
@@ -22,7 +22,7 @@ llama.cpp 那个功能可以同时跑多个任务，关掉面板也不会中断�
 ```powershell
 npm install
 npm run package
-code --install-extension syscomtool-0.2.1.vsix --force
+code --install-extension syscomtool-0.3.0.vsix --force
 ```
 
 之后**不用再手动装**：仓库里打了 `v*` 标签时，
@@ -43,18 +43,32 @@ npm run watch      # 或 Ctrl+Shift+B
 
 ## 图形化 llama.cpp 怎么用
 
-命令面板 → `SysComTool: 图形化 llama.cpp`，或直接点右侧栏里的这一项。面板分五段：
+命令面板 → `SysComTool: 图形化 llama.cpp`，或直接点左侧栏里的这一项。面板分五段：
 
 1. **llama.cpp**：点「自动搜索」，会在打开的工作区、`llama.searchPaths`、已保存选项的目录里找
-   `llama-cli[.exe]` / `llama-server[.exe]` / `main[.exe]`，跑 `--version` 认出构建号，
-   存成一条「选项」（路径 + 版本）。也可以「选文件夹」直接指定，比如 `build/bin`。
+   `llama-cli[.exe]` / `llama-server[.exe]` / `main[.exe]`，跑 `--version` 认出构建号**和 GPU 后端**
+   （CUDA / Vulkan / Metal / HIP / SYCL），存成一条「选项」（路径 + 版本 + 后端）。
+   也可以「选文件夹」直接指定，比如 `build/bin`。
 2. **模型**：选 `.gguf`，最近用过的会显示成小标签，点一下切回去。
-3. **参数**：提示词、`-n`、`-c`、`-t`、`-ngl`、`--temp`、`-b`、`-s`，外加一个「额外参数」。
-   **留空 = 不传这个参数**（不是传空字符串）。
+3. **参数**：提示词、GPU 加速、GPU 层数、多卡切片、张量分配、`-n`、`-c`、`-t`、`--temp`、`-b`、`-s`，
+   外加一个「额外参数」。**留空 = 不传这个参数**（不是传空字符串）。
 4. **命令**：实时生成等价命令行。可以「复制」、「在终端运行」（保留交互，适合对话模式），
    或「运行」（在面板里跑，输出直接流到下方）。
 5. **运行**：每个任务一张卡片，带状态、耗时、退出码、输出；可以单独「终止」或「移除」。
    超过并发上限的任务显示「排队中」，前面的结束后自动开始。
+
+### GPU 加速与多卡切片
+
+| 控件 | 生成的参数 | 说明 |
+| --- | --- | --- |
+| GPU 加速 = 禁用 | `-ngl 0` | 强制纯 CPU 推理；此时层数输入被忽略 |
+| GPU 加速 = 启用 | `-ngl <层数>`，层数留空按 `99` | 尽量把层放进显存 |
+| GPU 加速 = 自动 | 只有填了层数才传 `-ngl` | 默认值，方便手动对齐别人的命令 |
+| 多卡切片 | `--split-mode none\|layer\|row` | `none` 不切、`layer` 按层切、`row` 按行切；不选就不传 |
+| 张量分配 | `-ts 3,1` | 逗号分隔的各卡比例，个数一般等于 GPU 数 |
+
+切片只对多 GPU 构建有意义；单卡或纯 CPU 构建建议留「不传」。
+面板顶部会显示识别到的 GPU 后端，没识别到通常意味着这是纯 CPU 构建。
 
 几点行为说明：
 
@@ -95,7 +109,7 @@ SysComTool/
 │  │     ├─ updater.ts         # 下载 + code --install-extension
 │  │     └─ updateFlow.ts      # 手动/静默更新的交互流程
 │  ├─ views/
-│  │  ├─ featureListView.ts    # 右侧栏 WebviewView
+│  │  ├─ featureListView.ts    # 左侧栏 WebviewView
 │  │  ├─ sidebarHtml.ts        # 搜索 + 分组
 │  │  ├─ llamaPanel.ts         # llama 面板控制器
 │  │  └─ llamaHtml.ts          # llama 面板界面
@@ -121,7 +135,7 @@ import type { Feature } from '../core/types';
 export const pingFeature: Feature = {
   id: 'syscomtool.ping',
   title: 'Ping 一下',
-  category: '通用',              // 右侧栏的分组标题
+  category: '通用',              // 左侧栏的分组标题
   description: '确认外部依赖是否可达',
   async run(ctx) {
     ctx.logger.info('ping 开始');

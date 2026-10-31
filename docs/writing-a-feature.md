@@ -1,6 +1,6 @@
 # 加一个功能
 
-目标：10 分钟内让 `SysComTool: Ping 一下` 出现在右侧栏（分组 + 可搜索）和命令面板里。
+目标：10 分钟内让 `SysComTool: Ping 一下` 出现在左侧栏（分组 + 可搜索）和命令面板里。
 现成例子：`src/features/hello.ts`、`src/features/llama.ts`。
 
 ## 第 1 步：新建功能文件
@@ -14,7 +14,7 @@ import type { Feature } from '../core/types';
 export const pingFeature: Feature = {
   id: 'syscomtool.ping',                 // 命令 id，也是侧边栏项的 id
   title: 'Ping 一下',
-  category: '通用',                      // 右侧栏的分组标题
+  category: '通用',                      // 左侧栏的分组标题
   description: '确认外部依赖是否可达',
   async run(ctx) {
     ctx.logger.info('ping 开始');
@@ -40,7 +40,7 @@ export function createFeatures(deps: FeatureDeps): Feature[] {
 
 ## 第 3 步：在 package.json 声明命令
 
-不声明的话，右侧栏能看到，**命令面板里搜不到**：
+不声明的话，左侧栏能看到，**命令面板里搜不到**：
 
 ```jsonc
 "contributes": {
@@ -91,7 +91,7 @@ npm run check
 npm test
 ```
 
-按 `F5` 启动扩展开发宿主，确认：右侧栏有这一项、搜索能搜到、点了能执行、日志有记录。
+按 `F5` 启动扩展开发宿主，确认：左侧栏有这一项、搜索能搜到、点了能执行、日志有记录。
 
 ## 约定
 

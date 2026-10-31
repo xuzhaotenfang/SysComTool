@@ -41,7 +41,7 @@ export interface Feature {
   readonly title: string;
   /** 一句话说明，显示在面板的悬停提示里 */
   readonly description?: string;
-  /** 归属分组，它决定右侧栏里的分组标题；缺省归入「通用」 */
+  /** 归属分组，它决定左侧栏里的分组标题；缺省归入「通用」 */
   readonly category?: string;
   /** 依赖的外部能力（llama.cpp、模型文件等），仅用于提示 */
   readonly requires?: readonly string[];

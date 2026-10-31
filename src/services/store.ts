@@ -10,6 +10,8 @@ export interface LlamaProfile {
   dirPath: string;
   version?: string;
   build?: string;
+  /** GPU 后端，例如 CUDA / Vulkan / Metal；没有说明是纯 CPU 构建 */
+  backend?: string;
   savedAt: number;
 }
 

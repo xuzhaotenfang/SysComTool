@@ -14,7 +14,7 @@ export interface SidebarState {
   update?: { latest: string; current: string };
 }
 
-/** 右侧栏：搜索框 + 按归属分组的功能列表。 */
+/** 左侧栏：搜索框 + 按归属分组的功能列表。 */
 export function renderSidebarHtml(
   webview: vscode.Webview,
   state: SidebarState,

@@ -53,7 +53,27 @@ export function dirName(value: string): string {
 export interface VersionInfo {
   version?: string;
   build?: string;
+  /** 编译进构建的 GPU 后端，例如 CUDA / Vulkan / Metal / HIP / SYCL */
+  backend?: string;
   raw: string;
+}
+
+const GPU_BACKENDS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bCUDA\b/i, 'CUDA'],
+  [/\bHIP\b/i, 'HIP'],
+  [/\bVulkan\b/i, 'Vulkan'],
+  [/\bMetal\b/i, 'Metal'],
+  [/\bSYCL\b/i, 'SYCL'],
+];
+
+/** 从版本/构建信息里认 GPU 后端；认不出来说明大概率是纯 CPU 构建。 */
+export function parseBackend(raw: string): string | undefined {
+  for (const [pattern, name] of GPU_BACKENDS) {
+    if (pattern.test(raw)) {
+      return name;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -62,6 +82,7 @@ export interface VersionInfo {
  * ```
  * version: 4615 (6d1c3e1)
  * built with MSVC 19.40 for x64
+ * CUDA
  * ```
  */
 export function parseVersionOutput(raw: string): VersionInfo {
@@ -78,6 +99,7 @@ export function parseVersionOutput(raw: string): VersionInfo {
   return {
     version: versionMatch?.[1]?.trim(),
     build: build || undefined,
+    backend: parseBackend(raw),
     raw,
   };
 }
