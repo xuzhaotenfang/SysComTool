@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "syscomtool"
+dynamic = ["version"]
+description = "面向计算机系统能力大赛功能赛 proj59 的插件化辅助工具集"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "徐赵腾芳" }]
+keywords = ["competition", "llm-inference", "llama.cpp", "toolkit", "plugin"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: Utilities",
+]
+# 核心只依赖标准库；第三方依赖由各插件自己声明
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+syscomtool = "syscomtool.cli:main"
+
+[project.urls]
+Repository = "https://github.com/xuzhaotenfang/SysComTool"
+Mirror = "https://cnb.cool/cour-de-rotin/SysComTool"
+
+# 独立分发的插件登记在这里；本仓库自带的插件不走 entry point，
+# 直接在 src/syscomtool/core/registry.py 的 BUILTIN_MODULES 里登记。
+[project.entry-points."syscomtool.plugins"]
+# bench = "syscomtool_bench.plugin:PLUGIN"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "syscomtool.__version__" }
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = "-ra"
