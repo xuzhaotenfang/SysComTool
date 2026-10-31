@@ -15,8 +15,11 @@ import type {
   RegistrationReport,
 } from './types';
 
-/** 命令 id 允许的形态：`syscomtool.hello`、`syscomtool.mem.trace` */
-const FEATURE_ID = /^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$/;
+/**
+ * 命令 id 允许的形态：`syscomtool.hello`、`syscomtool.mem.trace`、`syscomtool.checkUpdate`
+ * —— 整体以小写字母开头、至少两段，段内允许 camelCase（与 VS Code 的习惯一致）。
+ */
+const FEATURE_ID = /^[a-z][a-zA-Z0-9]*(\.[a-zA-Z][a-zA-Z0-9]*)+$/;
 
 export function describeError(error: unknown): string {
   if (error instanceof Error) {
