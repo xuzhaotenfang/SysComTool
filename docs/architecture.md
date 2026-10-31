@@ -49,7 +49,7 @@
 3. 建 `Updater` + `UpdateFlow`（自动检查是静默的，失败只写日志）；
 4. `createFeatures({ panel, updateFlow })` 组装功能清单；
 5. `FeatureHost.registerAll()` 注册命令，失败的记录进 `report.failed`；
-6. 注册右侧栏 `WebviewViewProvider`，以及 `syscomtool.showLog`、`syscomtool.list` 两个内置命令；
+6. 注册左侧栏 `WebviewViewProvider`，以及 `syscomtool.showLog`、`syscomtool.list` 两个内置命令；
 7. `void updateFlow.maybeAuto()`——**不 await**，绝不阻塞启动。
 
 ## 功能契约
@@ -58,7 +58,7 @@
 | --- | --- | --- |
 | `id` | 是 | 命令 id，形如 `syscomtool.llama`，必须与 `package.json` 的 `contributes.commands` 一致 |
 | `title` | 是 | 侧边栏与命令面板显示名 |
-| `category` | 否 | 右侧栏分组标题，缺省「通用」 |
+| `category` | 否 | 左侧栏分组标题，缺省「通用」 |
 | `description` | 否 | 侧边栏第二行 + 悬停提示 |
 | `requires` | 否 | 依赖的外部能力，仅提示 |
 | `run(ctx)` | 是 | 执行体，`void | Promise<void>` |
@@ -66,7 +66,7 @@
 `FeatureContext` 只给三样：`logger`、`extensionVersion`、`getConfig(key, fallback)`。
 需要 `vscode` 就自己 import，核心不封装 API。
 
-## 右侧栏（WebviewView）
+## 左侧栏（WebviewView）
 
 用 webview 而不是 TreeView，是因为要「搜索框 + 分组」这两件树控件给不了的事：
 
@@ -85,12 +85,18 @@
 - 广度优先扫描工作区、`llama.searchPaths`、已保存选项所在目录，**深度 4、条目上限 6000**，
   跳过 `node_modules`、`.git`、`models` 等目录；`build/bin` 下的候选排前面；
 - 版本靠 `--version` 输出解析（`version: 4615 (6d1c3e1)` / `built with ...`），
-  解析失败也照样保存路径，只提示「未识别到版本」。
+  解析失败也照样保存路径，只提示「未识别到版本」；
+- 同一份输出里顺手认 **GPU 后端**（CUDA / Vulkan / Metal / HIP / SYCL），存进选项，
+  界面直接显示；认不出来就按「纯 CPU 构建」提示，避免用户以为切片参数没生效。
 
 ### 参数 → 命令（command.ts，纯函数）
 
-- 空字符串/空白 = **不传这个参数**；
-- 固定顺序 `-m → -p → -n → -c → -t → -ngl → --temp → -b → -s → 额外参数`；
+- 空字符串/空白 = **不传这个参数**；GPU 与切片是例外中的显式开关，见下；
+- 固定顺序
+  `-m → -p → -ngl → --split-mode → -ts → -n → -c → -t → --temp → -b → -s → 额外参数`；
+- GPU 加速三态：`off` 一定 `-ngl 0`（忽略层数）、`on` 一定带层数（空则 `99`）、
+  `auto` 只在填了层数时才传 —— 这样「禁用加速」不会因为残留层数而失效；
+- 多卡切片：`--split-mode none|layer|row` 与 `-ts 3,1`，不选即不传；
 - 额外参数按 shell 规则切词，支持引号；
 - 生成命令行时按 PowerShell 语法加引号，并把换行压成空格（终端里换行会断行）；
 - **真正运行时走 argv 直传**，不经过 shell，所以引号和换行原样保留。
