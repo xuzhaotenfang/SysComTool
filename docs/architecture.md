@@ -4,131 +4,163 @@
 
 **目标**
 
-- 一个扩展里放**多个互不相关的小功能**，加功能的成本是「新建一个文件 + 注册一行」；
-- 核心极薄：不 import 任何功能，功能之间也互不 import；
-- 任何一个功能出错，不影响其余功能和扩展启动；
-- 单测能在纯 Node 里跑，不需要拉起 VS Code。
+- 一个扩展里放多个互不相关的功能，加功能的成本是「新建一个文件 + 注册一行」；
+- 每个功能独立执行、独立报错，**可以同时使用**；
+- llama 这种重活有自己的并发模型（队列 + 上限 + 独立输出 + 可终止）；
+- 单测能在纯 Node 里跑，不需要 Electron / VS Code 实例。
 
 **非目标**
 
-- 不做「扩展之间的插件市场」——VS Code 不允许一个扩展动态发现另一个扩展的功能（见下）；
-- 不做 Webview 界面（当前全部用原生 TreeView / QuickPick / 通知）；
-- 不替功能决定它内部怎么实现。
-
-## 为什么"插件"落成了 features 目录
-
-最初想过让功能像插件一样独立分发，但 VS Code 的模型不支持：扩展之间没有互相发现功能的机制，
-`extends`/依赖只能声明扩展依赖，不能拿到对方导出的"功能"。
-
-所以这里的"可插拔"落在**仓库内部**：
-
-```text
-src/features/<name>.ts   一个功能 = 一个文件 = 一个命令 id
-src/features/index.ts    唯一的清单，决定谁被注册
-```
-
-好处是仍然满足「加功能不动核心」；代价是功能必须跟扩展一起发布。
-将来如果真有独立分发的需求，正确做法是**拆成独立扩展**，而不是在本扩展里造插件容器。
-
-重活（跑 benchmark、调 llama.cpp）建议放在功能里调用外部命令行/脚本，
-这样功能保持轻薄，脚本也能脱离编辑器单独跑。
+- 不做「扩展之间的插件市场」——VS Code 不允许一个扩展动态发现另一个扩展的导出；
+- 不做通用任务调度器（llama 任务之外的异步逻辑，功能自己用 `withProgress` 处理）；
+- 不替功能决定内部实现。
 
 ## 分层
 
 ```text
-        ┌────────────────────────────────────────────┐
- activate│ extension.ts                              │
-        │  建日志 → 建上下文 → 注册功能 → 建面板/命令 │
-        └───────┬──────────────────────┬─────────────┘
-                │                      │
-        ┌───────▼──────────┐   ┌───────▼──────────┐
-        │ core/（无 UI 依赖）│   │ core/（VS Code）  │
-        │  host  校验/注册/  │   │  log  输出通道    │
-        │  types 契约        │   │  context 配置     │
-        │                   │   │  tree  侧边栏     │
-        └───────┬───────────┘   └──────────────────┘
-                │ 只调用 feature.run(ctx)
-        ┌───────▼───────────────────────────────────┐
-        │ features/*.ts ── 每个文件一个 Feature      │
-        └───────────────────────────────────────────┘
+                ┌────────────────────────────────────────────┐
+   activate ───▶│ extension.ts                               │
+                │ 日志 → 状态 → 任务 → 面板 → 侧边栏 → 功能   │
+                └───────┬───────────────────────┬────────────┘
+                        │                       │
+          ┌─────────────▼────────┐   ┌──────────▼─────────────┐
+          │ core/                │   │ views/                 │
+          │  types  契约          │   │  featureListView 侧边栏│
+          │  host   注册/隔离     │   │  sidebarHtml   搜索/分组│
+          │  context/log         │   │  llamaPanel/html 面板  │
+          └─────────────┬────────┘   └──────────┬─────────────┘
+                        │                       │
+          ┌─────────────▼───────────────────────▼─────────────┐
+          │ services/                                        │
+          │  store        持久化（串行写）                    │
+          │  llama/detect 找构建、认版本                      │
+          │  llama/command 参数→argv（纯函数）                │
+          │  llama/runs   并发队列 + 输出 + 终止              │
+          │  update/*     查 Release → 下载 → 安装            │
+          └──────────────────────────────────────────────────┘
 ```
 
-依赖方向单向：`extension → core ← features`。
+依赖方向单向：`extension → core / views / services`，`features` 只依赖 `core` 的契约。
 
-## 生命周期
+## 启动流程
 
-1. **activate**：`extension.ts` 创建 `OutputLogger` 和 `FeatureContext`；
-2. **注册**：`FeatureHost.registerAll(FEATURES)` 逐个校验 → `vscode.commands.registerCommand`；
-   校验失败或注册抛错的记录进 `failed`，只写日志，不中断启动；
-3. **呈现**：`FeatureTreeProvider` 把功能列表挂到活动栏视图 `syscomtool.features`；
-   另注册两个内置命令 `syscomtool.list`（QuickPick 选功能）与 `syscomtool.showLog`；
-4. **执行**：用户点面板/命令 → 命令回调 → `dispatch()` → `feature.run(ctx)`；
-   抛错被捕获为「日志 + 一条错误通知」，不会出现红色堆栈弹窗；
-5. **deactivate / dispose**：`host` 与 `tree` 随 `context.subscriptions` 一起释放，命令注销。
+1. `activate()` 建 `OutputLogger`、`FeatureContext`（读配置）、`Store`（globalState）；
+2. 建 `RunManager`（并发上限来自 `llama.maxConcurrent`）与 `LlamaPanel`；
+3. 建 `Updater` + `UpdateFlow`（自动检查是静默的，失败只写日志）；
+4. `createFeatures({ panel, updateFlow })` 组装功能清单；
+5. `FeatureHost.registerAll()` 注册命令，失败的记录进 `report.failed`；
+6. 注册右侧栏 `WebviewViewProvider`，以及 `syscomtool.showLog`、`syscomtool.list` 两个内置命令；
+7. `void updateFlow.maybeAuto()`——**不 await**，绝不阻塞启动。
 
 ## 功能契约
 
-| 字段/方法 | 是否必需 | 说明 |
+| 字段/方法 | 必需 | 说明 |
 | --- | --- | --- |
-| `id` | 是 | 命令 id，形如 `syscomtool.hello`；必须与 `package.json` 的 `contributes.commands` 一致 |
-| `title` | 是 | 面板与命令面板显示名 |
-| `description` | 否 | 面板悬停提示 |
-| `requires` | 否 | 依赖的外部能力（`llama.cpp`、模型文件），仅作提示 |
+| `id` | 是 | 命令 id，形如 `syscomtool.llama`，必须与 `package.json` 的 `contributes.commands` 一致 |
+| `title` | 是 | 侧边栏与命令面板显示名 |
+| `category` | 否 | 右侧栏分组标题，缺省「通用」 |
+| `description` | 否 | 侧边栏第二行 + 悬停提示 |
+| `requires` | 否 | 依赖的外部能力，仅提示 |
 | `run(ctx)` | 是 | 执行体，`void | Promise<void>` |
 
-`FeatureContext` 提供三样东西：`logger`（info/warn/error/debug/show）、`extensionVersion`、
-`getConfig(key, fallback)`（读 `syscomtool.*`，不写死默认值）。
+`FeatureContext` 只给三样：`logger`、`extensionVersion`、`getConfig(key, fallback)`。
+需要 `vscode` 就自己 import，核心不封装 API。
 
-**故意不提供**的东西：`vscode` 模块本身、扩展 `context`、UI 句柄。
-功能需要什么就 `import * as vscode from 'vscode'`，核心不替它做封装。
+## 右侧栏（WebviewView）
 
-## 错误隔离的三层
+用 webview 而不是 TreeView，是因为要「搜索框 + 分组」这两件树控件给不了的事：
 
-| 层 | 失败时 |
-| --- | --- |
-| 功能定义不合法（id 非法/重复、缺 title、缺 run） | 记为加载失败，面板标灰，其他功能照常 |
-| `registerCommand` 抛错 | 同上，记录原因 |
-| `run()` 抛错 / Promise 拒绝 | 捕获 → `logger.error` → `showErrorMessage`，命令仍然可再次执行 |
+- 初始化时把 `state`（功能清单 + 失败项 + 可用更新）以 JSON 注入 HTML；
+- 之后状态变化通过 `postMessage({type:'state'})` 推送，由前端重新渲染列表；
+- 前端只做过滤/分组/点击，**不做业务判断**；
+- 回传只有三种消息：`run`（跑某个功能）、`update`（去更新）、`ready`（请求状态）。
 
-## 面板与命令面板
+搜索是纯前端过滤（title/description/id/category），不回到扩展进程，输入零延迟。
 
-- **面板**：`TreeView` 数据源就是 `FEATURES`。注册失败的项仍然显示（标灰 + 悬停原因），
-  这样"我明明写了却没出现"能被一眼看到；
-- **命令面板**：靠 `package.json` 的 `contributes.commands` 声明，不看 `FEATURES`。
-  两处不同步时：面板有点、命令面板搜不到（或反过来）——这是最容易踩的坑，已在文档和 PR 清单里强调。
+## llama 子系统
 
-## 配置
+### 识别构建（detect.ts）
 
-```jsonc
-// 读取方：ctx.getConfig('hello.greeting', '世界')
-// 声明方：package.json → contributes.configuration → syscomtool.hello.greeting
-```
+- 名字白名单：`llama-cli` / `llama-server` / `main` / `llama`（`.exe` 可有可无）；
+- 广度优先扫描工作区、`llama.searchPaths`、已保存选项所在目录，**深度 4、条目上限 6000**，
+  跳过 `node_modules`、`.git`、`models` 等目录；`build/bin` 下的候选排前面；
+- 版本靠 `--version` 输出解析（`version: 4615 (6d1c3e1)` / `built with ...`），
+  解析失败也照样保存路径，只提示「未识别到版本」。
 
-新增配置一律走 `contributes.configuration` 声明（这样设置页有说明、有默认值），
-代码里通过 `ctx.getConfig` 读，不要直接 `workspace.getConfiguration`。
+### 参数 → 命令（command.ts，纯函数）
 
-## 打包
+- 空字符串/空白 = **不传这个参数**；
+- 固定顺序 `-m → -p → -n → -c → -t → -ngl → --temp → -b → -s → 额外参数`；
+- 额外参数按 shell 规则切词，支持引号；
+- 生成命令行时按 PowerShell 语法加引号，并把换行压成空格（终端里换行会断行）；
+- **真正运行时走 argv 直传**，不经过 shell，所以引号和换行原样保留。
 
-`vsce package` 依据 `.vscodeignore` 决定内容，安装包里只应有：
+### 并发模型（runs.ts）
 
 ```text
-out/extension.js, out/core/*, out/features/*, media/*, package.json, README, LICENSE
+start() ──▶ queued ──(有槽位)──▶ running ──▶ succeeded / failed / cancelled
+                                   │
+                                   └─ 输出 → 200k 字符上限，只留尾部
 ```
 
-`src/`、`out/test/`、`docs/`、`.vscode/`、`node_modules/` 都不该出现。
-`npm run package` 之后用 `npx vsce ls --tree` 检查一遍。
+- 并发上限 `maxConcurrent`（默认 3），多出来的排队，`finish()` 时自动补位；
+- 每个任务独立的 `output`、`status`、`exitCode`，输出通过 `onOutput` 逐块推给界面；
+- 取消：排队中的直接标记取消；运行中的先 `taskkill /T /F`（Windows）或 `SIGTERM`；
+- **任务不归面板所有**：面板关了任务照跑，重新打开时 `snapshots()` 把历史输出带回来；
+- 定时器/轮询只在界面侧（500ms 刷新耗时），扩展侧不轮询。
+
+## 更新子系统
+
+```text
+启动（24h 节流）或手动
+   │
+   ├─ GET feedUrl（默认 GitHub releases/latest）
+   ├─ compareVersions(latest, current) ≤ 0 → 结束
+   ├─ pickVsixAsset：优先平台名，其次通用包
+   ├─ 下载到 globalStorage/updates/，清掉旧包
+   ├─ spawn code --install-extension <vsix> --force
+   └─ 提示「重启窗口」，用户点「立即重启」→ workbench.action.reloadWindow
+```
+
+为什么不走 Marketplace：扩展没有发布到市场，`code --install-extension` 对 VSIX 的支持
+就是官方给的自更新通道。代价是必须有一个能访问的 Release 源，所以 `feedUrl` 可配置。
+
+## 状态存储
+
+- 全部放 `context.globalState` 的单一 key（`schema: 1`），读时补默认值；
+- **写入串行化**：`Store` 内部维护一条 promise 链，多个功能同时写不会互相覆盖；
+- 只存数据（选项、最近模型、更新时间），不存运行中的任务——进程状态不落盘；
+- 换 schema 时递增 `schema` 并在读取处做迁移/丢弃。
+
+## 并发与隔离
+
+| 场景 | 处理 |
+| --- | --- |
+| 两个功能同时被点 | `FeatureHost` 各自独立 dispatch，互不等待 |
+| 功能抛错 / Promise 拒绝 | 捕获 → 日志 + 一条提示，命令仍可再次执行 |
+| 同时跑多个 llama 任务 | 队列 + 上限，独立输出与终止 |
+| 面板关闭时任务仍在跑 | 任务由 `RunManager` 持有，与视图生命周期解耦 |
+| 自动更新与手动更新同时在跑 | `UpdateFlow.checking` 互斥，重复调用直接返回 |
+| 状态并发写 | `Store` 的 promise 链串行化 |
+| 大输出 | 200k 字符上限，只留尾部并标记 `truncated` |
+
+## 安全
+
+- webview 用 CSP（`default-src 'none'`）+ 每次随机 nonce，脚本只加载内联的 nonce 脚本；
+- 面板只渲染数据，不拼 HTML 字符串（`textContent` / DOM API），避免注入；
+- 命令是「展示 + 复制」，真正执行一律 argv 直传，不把用户输入拼进 shell；
+- 下载的 VSIX 直接交给 `code` 安装——所以 `feedUrl` 由用户控制，默认是官方仓库。
 
 ## 测试策略
 
-- `core/host.ts` 与 `core/types.ts` 不 import `vscode`，靠注入 `HostApi` 在 Node 里测；
-- 测试直接 `node --test`（无需 mocha / Electron），编译产物在 `out/test/`；
-- 功能文件依赖 `vscode`，不做单元测试，靠扩展开发宿主（F5）手工验证；
-- 需要外部资源的逻辑（模型、llama.cpp）应放在被功能调用的独立脚本里，用脚本自己的测试覆盖。
+- 纯逻辑（命令拼装、版本解析、版本比较、状态存取、并发队列）全部单测，`node --test` 运行；
+- `RunManager` 注入假 `spawn`，用 `EventEmitter` 模拟子进程的 stdout/close，测排队、补位、
+  取消、退出码、截断，不需要真的起进程；
+- webview 只测 HTML 生成的烟雾测试（非空、nonce、CSP），渲染效果靠 F5 手工看。
 
 ## 后续扩展点
 
-- 面板按 `requires` 分组（`TreeView` 两级）；
-- 长任务统一 `withProgress` 包装，并把取消信号传给功能；
-- 状态栏入口（当前运行的功能 / 最近一次结果）；
-- 结果产物目录约定（`runs/<时间戳>/`），供 `bench` / `memtrace` / `report` 共享；
-- 集成终端：把 `llama.cpp` 的命令跑在终端里，保留用户交互能力。
+- 面板分组（按 `requires`）与结果产物目录（`runs/<时间戳>/`）；
+- `bench` / `memtrace` 复用 `RunManager`，把指标写进同一份 manifest；
+- llama 任务的「重新运行」「导出命令到脚本」；
+- 更新源支持签名校验（当前只校验 HTTPS + 来源域名）。
