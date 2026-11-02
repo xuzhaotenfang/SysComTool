@@ -7,6 +7,7 @@ import {
   parseTabularData,
   splitDelimited,
   splitMarkdownRow,
+  toNumber,
 } from '../services/chart/parse';
 
 function parseOk(text: string) {
@@ -111,6 +112,46 @@ test('数字识别覆盖常见写法', () => {
   assert.ok(!isNumericText('1,000'));
   assert.ok(!isNumericText(''));
   assert.ok(!isNumericText('nan'));
+});
+
+test('llama-bench 的「均值 ± 标准差」取均值', () => {
+  assert.equal(toNumber('381.06 ± 92.53'), 381.06);
+  assert.equal(toNumber('1.61 ± 0.11'), 1.61);
+  assert.ok(isNumericText('7.84 ± 0.14'));
+});
+
+test('带单位的数值取数字部分', () => {
+  assert.equal(toNumber('8.37 GiB'), 8.37);
+  assert.equal(toNumber('14.77 B'), 14.77);
+  assert.equal(toNumber('85%'), 85);
+  assert.equal(toNumber('12 ms'), 12);
+});
+
+test('日期与纯文本不会被当成数字', () => {
+  assert.equal(toNumber('2024-01-01'), undefined);
+  assert.equal(toNumber('Q4_K_M'), undefined);
+  assert.equal(toNumber('pp512'), undefined);
+});
+
+test('llama-bench 风格的对齐行（--:）也认', () => {
+  const text = [
+    '| model | size | params | backend | ngl | test | t/s |',
+    '| --- | ---: | ---: | --- | --: | --- | ---: |',
+    '| qwen2 14B Q4_K - Medium | 8.37 GiB | 14.77 B | CUDA | 0 | pp512 | 381.06 ± 92.53 |',
+  ].join('\n');
+
+  assert.ok(isMarkdownTable(text.split('\n')));
+  const dataset = parseOk(text);
+
+  assert.equal(dataset.format, 'markdown');
+  assert.equal(dataset.columns.length, 7);
+  assert.deepEqual(
+    dataset.columns.map((column) => column.name),
+    ['model', 'size', 'params', 'backend', 'ngl', 'test', 't/s'],
+  );
+  assert.equal(dataset.columns[4].kind, 'number');
+  assert.equal(dataset.columns[6].kind, 'number');
+  assert.equal(dataset.rows.length, 1);
 });
 
 test('字符串列里混一个数字不会被误判为数值列', () => {
