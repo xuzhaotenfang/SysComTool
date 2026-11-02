@@ -2,7 +2,8 @@ import { promises as fs } from 'node:fs';
 import * as vscode from 'vscode';
 import type { Logger } from '../core/types';
 import { buildChartModel, type ChartOptions, type ChartType } from '../services/chart/model';
-import { parseTabularData, previewDataset, type Dataset } from '../services/chart/parse';
+import { inferDefaults } from '../services/chart/infer';
+import { parseTabularData, previewDataset, toNumber, type Dataset } from '../services/chart/parse';
 import { renderChartHtml, sampleDataset, type ChartPanelState } from './chartHtml';
 import { createNonce } from './webview';
 
@@ -75,7 +76,7 @@ export class ChartPanel {
       return undefined;
     }
     const preview = previewDataset(this.dataset, PREVIEW_ROWS);
-    const { xIndex, yIndex } = this.defaultIndices(this.dataset);
+    const defaults = inferDefaults(this.dataset);
 
     return {
       columns: this.dataset.columns,
@@ -84,23 +85,12 @@ export class ChartPanel {
       format: this.dataset.format,
       warnings: this.dataset.warnings,
       options: {
-        xIndex,
-        yIndex,
+        ...defaults,
         type: 'line',
         sortByX: true,
         maxPoints: this.maxPoints(),
       },
     };
-  }
-
-  private defaultIndices(dataset: Dataset): { xIndex: number; yIndex: number } {
-    const numeric = dataset.columns
-      .map((column, index) => ({ column, index }))
-      .filter((entry) => entry.column.kind === 'number');
-
-    const xIndex = 0;
-    const yEntry = numeric.find((entry) => entry.index !== xIndex) ?? numeric[0];
-    return { xIndex, yIndex: yEntry?.index ?? 0 };
   }
 
   private async handle(raw: unknown): Promise<void> {
@@ -111,14 +101,13 @@ export class ChartPanel {
     const type = typeof message.type === 'string' ? message.type : '';
 
     switch (type) {
-      case 'ready':
-        if (this.dataset) {
-          const state = this.snapshotState();
-          if (state) {
-            this.post({ type: 'dataset', state });
-          }
+      case 'ready': {
+        const state = this.snapshotState();
+        if (state) {
+          this.post({ type: 'dataset', state });
         }
         return;
+      }
       case 'parseText':
         this.load(typeof message.text === 'string' ? message.text : '');
         return;
@@ -195,20 +184,38 @@ export class ChartPanel {
     }
     const source = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
     const columns = this.dataset.columns;
+    const defaults = inferDefaults(this.dataset);
 
     const toIndex = (value: unknown, fallback: number): number => {
       const index = Number(value);
       return Number.isInteger(index) && index >= 0 && index < columns.length ? index : fallback;
     };
 
-    const defaults = this.defaultIndices(this.dataset);
+    const xIndex = toIndex(source.xIndex, defaults.xIndex);
+    const yIndex = toIndex(source.yIndex, defaults.yIndex);
+
+    let groupIndex: number | undefined;
+    if (source.groupIndex !== null && source.groupIndex !== undefined && source.groupIndex !== '') {
+      const candidate = Number(source.groupIndex);
+      if (
+        Number.isInteger(candidate) &&
+        candidate >= 0 &&
+        candidate < columns.length &&
+        candidate !== xIndex &&
+        candidate !== yIndex
+      ) {
+        groupIndex = candidate;
+      }
+    }
+
     const type = CHART_TYPES.includes(source.type as ChartType)
       ? (source.type as ChartType)
       : 'line';
 
     return {
-      xIndex: toIndex(source.xIndex, defaults.xIndex),
-      yIndex: toIndex(source.yIndex, defaults.yIndex),
+      xIndex,
+      yIndex,
+      groupIndex,
       type,
       sortByX: source.sortByX !== false,
       maxPoints: this.maxPoints(),
@@ -275,17 +282,26 @@ export class ChartPanel {
       return;
     }
 
-    const xName = this.dataset.columns[options.xIndex]?.name ?? 'x';
-    const yName = this.dataset.columns[options.yIndex]?.name ?? 'y';
-    const lines = [`${escapeCsv(xName)},${escapeCsv(yName)}`];
+    const header = [
+      this.dataset.columns[options.xIndex]?.name ?? 'x',
+      this.dataset.columns[options.yIndex]?.name ?? 'y',
+    ];
+    if (options.groupIndex !== undefined) {
+      header.push(this.dataset.columns[options.groupIndex]?.name ?? 'group');
+    }
+    const lines = [header.map(escapeCsv).join(',')];
 
     for (const row of this.dataset.rows) {
       const x = (row[options.xIndex] ?? '').trim();
-      const y = (row[options.yIndex] ?? '').trim();
-      if (x === '' || y === '' || !Number.isFinite(Number(y))) {
+      const yText = (row[options.yIndex] ?? '').trim();
+      if (x === '' || toNumber(yText) === undefined) {
         continue;
       }
-      lines.push(`${escapeCsv(x)},${escapeCsv(y)}`);
+      const cells = [x, yText];
+      if (options.groupIndex !== undefined) {
+        cells.push((row[options.groupIndex] ?? '').trim());
+      }
+      lines.push(cells.map(escapeCsv).join(','));
     }
 
     const target = await vscode.window.showSaveDialog({

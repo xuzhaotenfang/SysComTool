@@ -1,28 +1,51 @@
 /**
- * 把「数据集 + 选中的列」变成可以直接画的一坨几何数据。
+ * 把「数据集 + 选中的列」变成可以直接画的一堆几何数据。
  *
  * 坐标已经换算成 SVG 像素，视图层只负责画，不做数学 —— 这样模型可以单测。
+ * 支持按一列拆成多条序列（同一个 X 对比 pp512 / tg128 这类场景）。
  */
 
 import { areaPath, polylinePath, smoothPath } from './path';
-import type { Dataset } from './parse';
-import { lttb, niceScale, sortByX, type Point } from './scale';
+import { toNumber, type Dataset } from './parse';
+import { lttb, niceScale, type Point } from './scale';
 
 export type ChartType = 'line' | 'smooth' | 'scatter' | 'bar' | 'area';
 
 export interface ChartOptions {
   xIndex: number;
   yIndex: number;
+  /** 可选：按这一列拆成多条序列 */
+  groupIndex?: number;
   type: ChartType;
   /** 数值型 X 是否先按 X 排序；不排序就按数据行顺序连线 */
   sortByX: boolean;
-  /** 超过就降采样（柱状图按步长抽样） */
+  /** 每条序列最多保留多少点 */
   maxPoints: number;
 }
 
 export interface ChartPoint extends Point {
   vx: string;
   vy: string;
+  series: string;
+}
+
+export interface BarModel {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  vx: string;
+  vy: string;
+  series: string;
+}
+
+export interface SeriesModel {
+  name: string;
+  color: string;
+  path?: string;
+  area?: string;
+  points?: ChartPoint[];
+  bars?: BarModel[];
 }
 
 export interface ChartModel {
@@ -39,24 +62,35 @@ export interface ChartModel {
     title: string;
     ticks: Array<{ value: string; pos: number }>;
   };
-  series: {
-    name: string;
-    path?: string;
-    area?: string;
-    points?: ChartPoint[];
-    bars?: Array<{ x: number; y: number; width: number; height: number; vx: string; vy: string }>;
-  };
+  series: SeriesModel[];
+  legend: Array<{ name: string; color: string }>;
   meta: {
     source: number;
     used: number;
     dropped: number;
     downsampled: number;
+    groups: number;
     note?: string;
   };
 }
 
 export const CHART_WIDTH = 900;
 export const CHART_HEIGHT = 520;
+
+/** 8 色，明暗主题下都能看清 */
+export const SERIES_COLORS = [
+  '#3794ff',
+  '#d18616',
+  '#89d185',
+  '#f14c4c',
+  '#b180d7',
+  '#4ec9b0',
+  '#dcdcaa',
+  '#ce9178',
+];
+
+const MAX_GROUPS = 12;
+const OTHER = '其他';
 
 const MARGIN = { left: 74, right: 26, top: 34, bottom: 60 };
 const PLOT = {
@@ -69,6 +103,14 @@ const PLOT = {
 export type ModelResult = { ok: true; model: ChartModel } | { ok: false; error: string };
 
 const TYPES: readonly ChartType[] = ['line', 'smooth', 'scatter', 'bar', 'area'];
+
+interface Row {
+  xText: string;
+  xNum?: number;
+  y: number;
+  yText: string;
+  group: string;
+}
 
 export function buildChartModel(dataset: Dataset, options: ChartOptions): ModelResult {
   const xColumn = dataset.columns[options.xIndex];
@@ -84,17 +126,20 @@ export function buildChartModel(dataset: Dataset, options: ChartOptions): ModelR
     return { ok: false, error: `不认识的图型「${options.type}」` };
   }
 
+  const groupColumn =
+    options.groupIndex !== undefined && options.groupIndex >= 0
+      ? dataset.columns[options.groupIndex]
+      : undefined;
+
   const numericX = xColumn.kind === 'number';
   const source = dataset.rows.length;
+  const rows: Row[] = [];
   let dropped = 0;
-
-  const numericPoints: ChartPoint[] = [];
-  const categoryPoints: ChartPoint[] = [];
 
   for (const row of dataset.rows) {
     const yText = (row[options.yIndex] ?? '').trim();
-    const y = Number(yText);
-    if (yText === '' || !Number.isFinite(y)) {
+    const y = toNumber(yText);
+    if (y === undefined) {
       dropped += 1;
       continue;
     }
@@ -105,184 +150,142 @@ export function buildChartModel(dataset: Dataset, options: ChartOptions): ModelR
       continue;
     }
 
+    let xNum: number | undefined;
     if (numericX) {
-      const x = Number(xText);
-      if (!Number.isFinite(x)) {
+      xNum = toNumber(xText);
+      if (xNum === undefined) {
         dropped += 1;
         continue;
       }
-      numericPoints.push({ x, y, vx: xText, vy: yText });
-    } else {
-      categoryPoints.push({ x: categoryPoints.length, y, vx: xText, vy: yText });
     }
+
+    const group = groupColumn ? ((row[options.groupIndex as number] ?? '').trim() || '(空)') : '';
+    rows.push({ xText, xNum, y, yText, group });
   }
 
-  const usable = numericX ? numericPoints : categoryPoints;
-  if (usable.length === 0) {
+  if (rows.length === 0) {
     return { ok: false, error: '没有可用的数据点：检查 X / Y 列是否选对，以及是否有空值' };
   }
 
-  if (numericX) {
-    return buildNumericModel(dataset, options, usable, dropped, source, xColumn.name, yColumn.name);
-  }
-  return buildCategoryModel(dataset, options, usable, dropped, source, xColumn.name, yColumn.name);
-}
+  const groups = collectGroups(rows, groupColumn !== undefined);
+  const categoryLabels = numericX ? [] : uniqueLabels(rows);
 
-function buildNumericModel(
-  _dataset: Dataset,
-  options: ChartOptions,
-  points: ChartPoint[],
-  dropped: number,
-  source: number,
-  xTitle: string,
-  yTitle: string,
-): ModelResult {
-  const ordered = options.sortByX ? sortByX(points) : points;
-  const originalCount = ordered.length;
+  const xValues = rows.map((row) => (numericX ? (row.xNum as number) : categoryLabels.indexOf(row.xText)));
+  const xScale = niceScale(
+    numericX ? Math.min(...xValues) : 0,
+    numericX ? Math.max(...xValues) : Math.max(categoryLabels.length - 1, 1),
+    numericX ? 8 : Math.max(categoryLabels.length, 2),
+  );
 
-  let used = ordered;
-  let downsampled = 0;
-  if (options.maxPoints > 0 && originalCount > options.maxPoints) {
-    used = lttb(ordered, options.maxPoints);
-    downsampled = originalCount;
-  }
-
-  const xValues = used.map((point) => point.x);
-  const yValues = used.map((point) => point.y);
-
-  const xScale = niceScale(Math.min(...xValues), Math.max(...xValues), 8);
   const needsZero = options.type === 'bar' || options.type === 'area';
-  const yMin = Math.min(...yValues, ...(needsZero ? [0] : []));
-  const yMax = Math.max(...yValues, ...(needsZero ? [0] : []));
-  const yScale = niceScale(yMin, yMax, 6);
-
-  const toX = (value: number): number =>
-    PLOT.left + ((value - xScale.min) / (xScale.max - xScale.min || 1)) * (PLOT.right - PLOT.left);
-  const toY = (value: number): number =>
-    PLOT.bottom - ((value - yScale.min) / (yScale.max - yScale.min || 1)) * (PLOT.bottom - PLOT.top);
-
-  const pixels: ChartPoint[] = used.map((point) => ({
-    x: toX(point.x),
-    y: toY(point.y),
-    vx: point.vx,
-    vy: point.vy,
-  }));
-
-  const series: ChartModel['series'] = { name: yTitle };
-  if (options.type === 'scatter') {
-    series.points = pixels;
-  } else if (options.type === 'bar') {
-    const width = Math.max(1, Math.min(24, (PLOT.right - PLOT.left) / Math.max(used.length, 1) * 0.7));
-    series.bars = pixels.map((point) => ({
-      x: point.x - width / 2,
-      y: point.y,
-      width,
-      height: PLOT.bottom - point.y,
-      vx: point.vx,
-      vy: point.vy,
-    }));
-  } else if (options.type === 'smooth') {
-    series.path = smoothPath(pixels);
-    series.points = pixels;
-  } else {    series.path = polylinePath(pixels);
-    series.points = pixels;
-    if (options.type === 'area') {
-      series.area = areaPath(pixels, PLOT.bottom);
-    }
-  }
-
-  return {
-    ok: true,
-    model: {
-      width: CHART_WIDTH,
-      height: CHART_HEIGHT,
-      plot: PLOT,
-      type: options.type,
-      x: {
-        kind: 'number',
-        title: xTitle,
-        ticks: xScale.ticks.map((value) => ({ value: formatNumber(value), pos: toX(value) })),
-      },
-      y: {
-        title: yTitle,
-        ticks: yScale.ticks.map((value) => ({ value: formatNumber(value), pos: toY(value) })),
-      },
-      series,
-      meta: {
-        source,
-        used: used.length,
-        dropped,
-        downsampled,
-        note: withSmoothFallback(
-          buildNote(dropped, downsampled, originalCount, used.length),
-          options.type === 'smooth' && series.path !== undefined && !series.path.includes('C'),
-        ),
-      },
-    },
-  };
-}
-
-function buildCategoryModel(
-  _dataset: Dataset,
-  options: ChartOptions,
-  points: ChartPoint[],
-  dropped: number,
-  source: number,
-  xTitle: string,
-  yTitle: string,
-): ModelResult {
-  const originalCount = points.length;
-  const step = options.maxPoints > 0 ? Math.ceil(originalCount / options.maxPoints) : 1;
-  const kept = step > 1 ? points.filter((_, index) => index % step === 0) : points;
-  const downsampled = step > 1 ? originalCount : 0;
-
-  const yValues = kept.map((point) => point.y);
-  const needsZero = options.type === 'bar' || options.type === 'area';
+  const yValues = rows.map((row) => row.y);
   const yScale = niceScale(
     Math.min(...yValues, ...(needsZero ? [0] : [])),
     Math.max(...yValues, ...(needsZero ? [0] : [])),
     6,
   );
 
-  const band = (PLOT.right - PLOT.left) / Math.max(kept.length, 1);
-  const toX = (index: number): number => PLOT.left + band * (index + 0.5);
+  const toX = (value: number): number =>
+    PLOT.left + ((value - xScale.min) / (xScale.max - xScale.min || 1)) * (PLOT.right - PLOT.left);
   const toY = (value: number): number =>
     PLOT.bottom - ((value - yScale.min) / (yScale.max - yScale.min || 1)) * (PLOT.bottom - PLOT.top);
 
-  const pixels: ChartPoint[] = kept.map((point, index) => ({
-    x: toX(index),
-    y: toY(point.y),
-    vx: point.vx,
-    vy: point.vy,
-  }));
-
-  const series: ChartModel['series'] = { name: yTitle };
-  if (options.type === 'bar') {
-    const width = Math.max(1, band * 0.66);
-    series.bars = pixels.map((point) => ({
-      x: point.x - width / 2,
-      y: point.y,
-      width,
-      height: PLOT.bottom - point.y,
-      vx: point.vx,
-      vy: point.vy,
-    }));
-  } else if (options.type === 'scatter') {
-    series.points = pixels;
-  } else {
-    // 分类轴不做平滑插值：标签之间没有"中间值"这回事
-    series.path = polylinePath(pixels);
-    series.points = pixels;
-    if (options.type === 'area') {
-      series.area = areaPath(pixels, PLOT.bottom);
+  const xPosOf = (row: Row): number => {
+    if (numericX) {
+      return toX(row.xNum as number);
     }
+    const index = categoryLabels.indexOf(row.xText);
+    const band = (PLOT.right - PLOT.left) / Math.max(categoryLabels.length, 1);
+    return PLOT.left + band * (index + 0.5);
+  };
+
+  const series: SeriesModel[] = [];
+  const legend: ChartModel['legend'] = [];
+  let used = 0;
+  let downsampled = 0;
+  let smoothFellBack = false;
+
+  const groupCount = Math.max(groups.size, 1);
+  const band = (PLOT.right - PLOT.left) / Math.max(categoryLabels.length, 1);
+  const barWidth = numericX
+    ? Math.max(1.5, Math.min(22, (PLOT.right - PLOT.left) / Math.max(rows.length, 1) / groupCount))
+    : Math.max(1, (band * 0.8) / groupCount);
+
+  let groupIndex = 0;
+  for (const [name, groupRows] of groups) {
+    const label = groupColumn ? name : yColumn.name;
+    const color = SERIES_COLORS[groupIndex % SERIES_COLORS.length];
+    const offset = (groupIndex - (groupCount - 1) / 2) * barWidth;
+
+    let orderedRows: Row[] = groupRows;
+    if (numericX && options.sortByX) {
+      orderedRows = [...groupRows].sort((left, right) => (left.xNum as number) - (right.xNum as number));
+    }
+
+    let sampled: Array<{ row: Row; x: number; y: number }> = orderedRows.map((row) => ({
+      row,
+      x: numericX ? (row.xNum as number) : 0,
+      y: row.y,
+    }));
+
+    const originalCount = sampled.length;
+    if (options.maxPoints > 0 && originalCount > options.maxPoints) {
+      sampled = numericX ? lttb(sampled, options.maxPoints) : stride(sampled, options.maxPoints);
+      downsampled += originalCount;
+    }
+    used += sampled.length;
+
+    const points: ChartPoint[] = sampled.map(({ row }) => ({
+      x: round(xPosOf(row) + (options.type === 'bar' ? offset : 0)),
+      y: round(toY(row.y)),
+      vx: row.xText,
+      vy: row.yText,
+      series: label,
+    }));
+
+    const model: SeriesModel = { name: label, color };
+    if (options.type === 'scatter') {
+      model.points = points;
+    } else if (options.type === 'bar') {
+      model.bars = points.map((point) => ({
+        x: round(point.x - barWidth / 2),
+        y: point.y,
+        width: round(barWidth),
+        height: round(PLOT.bottom - point.y),
+        vx: point.vx,
+        vy: point.vy,
+        series: label,
+      }));
+    } else {
+      const isSmooth = options.type === 'smooth' && numericX;
+      model.path = isSmooth ? smoothPath(points) : polylinePath(points);
+      if (isSmooth && !model.path.includes('C')) {
+        smoothFellBack = true;
+      }
+      model.points = points;
+      if (options.type === 'area') {
+        model.area = areaPath(points, PLOT.bottom);
+      }
+    }
+
+    series.push(model);
+    legend.push({ name: label, color });
+    groupIndex += 1;
   }
 
-  const labelStep = Math.max(1, Math.ceil(kept.length / 14));
-  const ticks = pixels
-    .map((point, index) => ({ value: point.vx, pos: point.x, index }))
-    .filter((tick) => tick.index % labelStep === 0)
-    .map((tick) => ({ value: tick.value, pos: tick.pos }));
+  const categoryTicks = buildCategoryTicks(categoryLabels, (index) => {
+    const bandWidth = (PLOT.right - PLOT.left) / Math.max(categoryLabels.length, 1);
+    return PLOT.left + bandWidth * (index + 0.5);
+  });
+
+  const note = buildNote({
+    dropped,
+    downsampled,
+    original: source,
+    used,
+    groups: groups.size,
+    smoothFellBack,
+  });
 
   return {
     ok: true,
@@ -291,41 +294,122 @@ function buildCategoryModel(
       height: CHART_HEIGHT,
       plot: PLOT,
       type: options.type,
-      x: { kind: 'category', title: xTitle, ticks },
+      x: numericX
+        ? {
+            kind: 'number',
+            title: xColumn.name,
+            ticks: xScale.ticks.map((value) => ({ value: formatNumber(value), pos: round(toX(value)) })),
+          }
+        : { kind: 'category', title: xColumn.name, ticks: categoryTicks },
       y: {
-        title: yTitle,
-        ticks: yScale.ticks.map((value) => ({ value: formatNumber(value), pos: toY(value) })),
+        title: yColumn.name,
+        ticks: yScale.ticks.map((value) => ({ value: formatNumber(value), pos: round(toY(value)) })),
       },
       series,
+      legend,
       meta: {
         source,
-        used: kept.length,
+        used,
         dropped,
         downsampled,
-        note: buildNote(dropped, downsampled, originalCount, kept.length),
+        groups: groups.size,
+        note,
       },
     },
   };
 }
 
-function buildNote(dropped: number, downsampled: number, original: number, used: number): string | undefined {
-  const parts: string[] = [];
-  if (dropped > 0) {
-    parts.push(`跳过 ${dropped} 行（X/Y 为空或不是数字）`);
+function collectGroups(rows: Row[], grouped: boolean): Map<string, Row[]> {
+  const groups = new Map<string, Row[]>();
+
+  for (const row of rows) {
+    const key = grouped ? row.group : '';
+    const bucket = groups.get(key);
+    if (bucket) {
+      bucket.push(row);
+    } else {
+      groups.set(key, [row]);
+    }
   }
-  if (downsampled > 0) {
-    parts.push(`降采样：${original} → ${used} 点`);
+
+  if (groups.size <= MAX_GROUPS) {
+    return groups;
   }
-  return parts.length > 0 ? parts.join('；') : undefined;
+
+  // 分组太多会把图挤成一团：保留前若干组，其余并进「其他」
+  const trimmed = new Map<string, Row[]>();
+  let index = 0;
+  for (const [key, value] of groups) {
+    if (index < MAX_GROUPS - 1) {
+      trimmed.set(key, value);
+    } else {
+      const rest = trimmed.get(OTHER) ?? [];
+      trimmed.set(OTHER, rest.concat(value));
+    }
+    index += 1;
+  }
+  return trimmed;
 }
 
-/** 平滑需要 X 严格递增；有重复或乱序时退回折线，并在说明里讲清楚 */
-function withSmoothFallback(note: string | undefined, fellBack: boolean): string | undefined {
-  if (!fellBack) {
-    return note;
+function uniqueLabels(rows: Row[]): string[] {
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const row of rows) {
+    if (!seen.has(row.xText)) {
+      seen.add(row.xText);
+      labels.push(row.xText);
+    }
   }
-  const extra = 'X 有重复或乱序，平滑曲线已退回折线';
-  return note ? `${note}；${extra}` : extra;
+  return labels;
+}
+
+function buildCategoryTicks(
+  labels: string[],
+  position: (index: number) => number,
+): Array<{ value: string; pos: number }> {
+  const step = Math.max(1, Math.ceil(labels.length / 14));
+  const ticks: Array<{ value: string; pos: number }> = [];
+  for (let index = 0; index < labels.length; index += step) {
+    ticks.push({ value: labels[index], pos: round(position(index)) });
+  }
+  return ticks;
+}
+
+function stride<T>(items: readonly T[], limit: number): T[] {
+  const step = Math.max(1, Math.ceil(items.length / limit));
+  const kept: T[] = [];
+  for (let index = 0; index < items.length; index += step) {
+    kept.push(items[index]);
+  }
+  return kept;
+}
+
+function round(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function buildNote(input: {
+  dropped: number;
+  downsampled: number;
+  original: number;
+  used: number;
+  groups: number;
+  smoothFellBack: boolean;
+}): string | undefined {
+  const parts: string[] = [];
+  if (input.dropped > 0) {
+    parts.push(`跳过 ${input.dropped} 行（X/Y 为空或不是数字）`);
+  }
+  if (input.downsampled > 0) {
+    parts.push(`降采样：${input.downsampled} → ${input.used} 点`);
+  }
+  if (input.groups > 1) {
+    parts.push(`${input.groups} 条序列`);
+  }
+  if (input.smoothFellBack) {
+    parts.push('部分序列的 X 有重复或乱序，平滑已退回折线');
+  }
+  return parts.length > 0 ? parts.join('；') : undefined;
 }
 
 /** 刻度文字：整数原样，小数保留 4 位有效数字，避免出现 0.30000000000000004 */
