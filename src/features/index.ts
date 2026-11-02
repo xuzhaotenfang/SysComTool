@@ -1,12 +1,15 @@
 import type { Feature } from '../core/types';
 import type { UpdateFlow } from '../services/update/updateFlow';
+import type { ChartPanel } from '../views/chartPanel';
 import type { LlamaPanel } from '../views/llamaPanel';
+import { createChartFeature } from './chart';
 import { helloFeature } from './hello';
 import { createLlamaFeature } from './llama';
 import { createUpdateFeature } from './update';
 
 export interface FeatureDeps {
   panel: LlamaPanel;
+  chartPanel: ChartPanel;
   updateFlow: UpdateFlow;
 }
 
@@ -22,6 +25,7 @@ export function createFeatures(deps: FeatureDeps): Feature[] {
   return [
     helloFeature,
     createLlamaFeature(deps.panel),
+    createChartFeature(deps.chartPanel),
     createUpdateFeature(() => {
       void deps.updateFlow.check({ interactive: true });
     }),

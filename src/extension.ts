@@ -10,6 +10,7 @@ import { Store } from './services/store';
 import { UpdateFlow } from './services/update/updateFlow';
 import { Updater } from './services/update/updater';
 import { FeatureListView } from './views/featureListView';
+import { ChartPanel } from './views/chartPanel';
 import { LlamaPanel } from './views/llamaPanel';
 
 const DEFAULT_FEED = 'https://api.github.com/repos/xuzhaotenfang/SysComTool/releases/latest';
@@ -29,6 +30,7 @@ export function activate(context: vscode.ExtensionContext): void {
   runManager = runs;
 
   const panel = new LlamaPanel({ context, store, runs, logger });
+  const chartPanel = new ChartPanel({ context, logger });
 
   const updater = new Updater({
     logger,
@@ -47,7 +49,7 @@ export function activate(context: vscode.ExtensionContext): void {
     onUpdateFound: () => sidebar?.refresh(),
   });
 
-  const features = createFeatures({ panel, updateFlow });
+  const features = createFeatures({ panel, chartPanel, updateFlow });
   const host = new FeatureHost(
     {
       registerCommand: (id, handler) => vscode.commands.registerCommand(id, handler),
@@ -84,6 +86,7 @@ export function activate(context: vscode.ExtensionContext): void {
     { dispose: () => host.dispose() },
     { dispose: () => runs.dispose() },
     { dispose: () => panel.dispose() },
+    { dispose: () => chartPanel.dispose() },
     vscode.window.registerWebviewViewProvider(FeatureListView.viewType, sidebar, {
       webviewOptions: { retainContextWhenHidden: true },
     }),
