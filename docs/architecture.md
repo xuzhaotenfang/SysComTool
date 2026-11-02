@@ -115,6 +115,32 @@ start() ──▶ queued ──(有槽位)──▶ running ──▶ succeeded 
 - **任务不归面板所有**：面板关了任务照跑，重新打开时 `snapshots()` 把历史输出带回来；
 - 定时器/轮询只在界面侧（500ms 刷新耗时），扩展侧不轮询。
 
+## 图表子系统
+
+```text
+文本（粘贴/文件）
+   │ parse.ts      分隔符嗅探、引号与转义、Markdown 对齐行、列类型推断
+   ▼
+Dataset { columns[](name,kind), rows[][], warnings }
+   │ model.ts      选列 → 过滤空值 → 排序/降采样 → 刻度 → 像素坐标
+   ▼
+ChartModel { plot, x/y.ticks, series(path|points|bars), meta }
+   │ chartHtml.ts  只做 DOM/SVG 绘制 + 悬停提示
+   ▼
+SVG（可复制、可保存、可导出对应 CSV）
+```
+
+几个刻意的决定：
+
+- **几何算在扩展侧**（`model.ts`），视图只负责画。所以刻度、降采样、平滑这些容易算错的东西
+  能在纯 Node 里单测，而 webview 里没有数学逻辑可测不上；
+- **图型 ≠ 函数图**：分类 X 用 band 刻度（每类一根柱），散点不假设顺序，
+  折线按数据行顺序连；「按 X 排序」是显式开关而不是默认行为；
+- **平滑只对严格递增的 X 生效**：层数据里有重复 x（同一线程多组实验）时硬插值会造出假峰谷，
+  这里直接退回折线并在图下写明原因；
+- **降采样**：数值 X 用 LTTB（保峰谷），分类 X 用步长抽样，上限来自 `chart.maxPoints`；
+- **导出**：SVG 是矢量、无依赖；CSV 导出的是「当前 X/Y 这一对列」，方便别人复现图。
+
 ## 更新子系统
 
 ```text
@@ -149,6 +175,7 @@ start() ──▶ queued ──(有槽位)──▶ running ──▶ succeeded 
 | 自动更新与手动更新同时在跑 | `UpdateFlow.checking` 互斥，重复调用直接返回 |
 | 状态并发写 | `Store` 的 promise 链串行化 |
 | 大输出 | 200k 字符上限，只留尾部并标记 `truncated` |
+| 大数据出图 | 超过 `chart.maxPoints` 自动降采样，几何在扩展侧算，webview 只画 |
 
 ## 安全
 
@@ -159,10 +186,11 @@ start() ──▶ queued ──(有槽位)──▶ running ──▶ succeeded 
 
 ## 测试策略
 
-- 纯逻辑（命令拼装、版本解析、版本比较、状态存取、并发队列）全部单测，`node --test` 运行；
+- 纯逻辑（命令拼装、版本解析、版本比较、状态存取、并发队列、表格解析、刻度、降采样、路径生成）全部单测，`node --test` 运行；
 - `RunManager` 注入假 `spawn`，用 `EventEmitter` 模拟子进程的 stdout/close，测排队、补位、
   取消、退出码、截断，不需要真的起进程；
-- webview 只测 HTML 生成的烟雾测试（非空、nonce、CSP），渲染效果靠 F5 手工看。
+- 图表链路测到「模型」这一层：解析 → 选列 → 几何，用真实 CSV 片段驱动；
+- webview 只测 HTML 生成的烟雾测试（非空、nonce、CSP、控件 id），渲染效果靠 F5 手工看。
 
 ## 后续扩展点
 

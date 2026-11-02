@@ -1,6 +1,6 @@
 # SysComTool
 
-> 一个 VS Code 扩展：左侧栏按归属分组、可搜索的功能入口，外加一个图形化的 llama.cpp 运行器。
+> 一个 VS Code 扩展：左侧栏按归属分组、可搜索的功能入口，内置图形化 llama.cpp 运行器与数据出图。
 
 装好之后活动栏多一个图标，点开就是功能列表；每个功能是独立文件、独立命令，互不 import。
 llama.cpp 那个功能可以同时跑多个任务，关掉面板也不会中断。
@@ -10,6 +10,7 @@ llama.cpp 那个功能可以同时跑多个任务，关掉面板也不会中断�
 | 能力 | 说明 |
 | --- | --- |
 | 左侧栏功能面板 | 搜索框按名字/说明过滤，功能按 `category` 分组；点一项即执行 |
+| 数据出图 | CSV / Markdown 表格 / 粘贴数据，选一个自变量与一个因变量，出折线、平滑曲线、散点、柱状、面积图；可导出 SVG 与 CSV |
 | 图形化 llama.cpp | 自动搜索/手动指定编译好的 llama.cpp，识别版本并存为「选项」；选模型、填参数、预览命令、复制、在终端跑、在面板里跑 |
 | 多任务并行 | 运行有并发上限（默认 3），超出的排队；每个任务独立输出、独立终止 |
 | 自动更新 | 启动时静默检查 GitHub Releases（24 小时节流），也可随时手动「检查更新」 |
@@ -22,7 +23,7 @@ llama.cpp 那个功能可以同时跑多个任务，关掉面板也不会中断�
 ```powershell
 npm install
 npm run package
-code --install-extension syscomtool-0.3.0.vsix --force
+code --install-extension syscomtool-0.3.1.vsix --force
 ```
 
 之后**不用再手动装**：仓库里打了 `v*` 标签时，
@@ -77,10 +78,39 @@ npm run watch      # 或 Ctrl+Shift+B
   命令预览里换行会被压成空格；
 - 关掉面板不会杀任务，重新打开还能看到输出（任务归 `RunManager` 管，不归面板）。
 
+## 数据出图怎么用
+
+命令面板 → `SysComTool: 数据出图`，或点左侧栏里的这一项。分三步：
+
+1. **给数据**：`打开文件…`（CSV / TSV / Markdown / txt），或直接把内容粘进输入框再点「解析粘贴内容」，
+   也可以先点「示例数据」看看效果。分隔符自动识别（`,` / `;` / Tab），
+   带引号、引号内换行、`""` 转义都能解析；Markdown 表格会自动跳过 `|---|` 对齐行。
+2. **选列与图型**：X 可以选任意列（数值或分类），Y 只能选数值列。
+   表头下面会给出预览和规模，列数不齐、表头为空/重名都会提示。
+3. **看图 / 导出**：图下面显示实际用了多少行、是否降采样；
+   可以「复制 SVG」「保存 SVG」「导出数据 CSV」。
+
+| 图型 | 适合的场景 |
+| --- | --- |
+| 折线 | 按 X 趋势；X 不单调也可以，按数据顺序连 |
+| 平滑曲线 | X 严格递增时用单调三次插值；有重复/乱序会自动退回折线并在图下说明 |
+| 散点 | 看分布、相关性，不假设任何顺序 |
+| 柱状 | 分类对比（模型、量化档位…）；X 是分类时每类一根柱 |
+| 面积 | 强调累计量/占比随 X 的变化 |
+
+几个实现上的取舍：
+
+- **超过 `chart.maxPoints`（默认 3000）自动降采样**：数值 X 用 LTTB（保峰谷），
+  分类 X 按步长抽样；图下会写明「降采样：N → M 点」。
+- **平滑不是默认**：层数据常有抖动，插值会造出不存在的峰谷；要平滑得自己选。
+- **坐标轴自己算**：刻度按 1/2/5 × 10ⁿ 取整，避免 `0.30000000000000004` 这种标签。
+- 图是 SVG，导出后在任意文档里都是矢量。
+
 ## 配置
 
 | 配置项 | 默认 | 说明 |
 | --- | --- | --- |
+| `syscomtool.chart.maxPoints` | `3000` | 出图最多保留多少点，超出按 LTTB / 步长降采样 |
 | `syscomtool.llama.maxConcurrent` | `3` | 同时运行几个 llama 任务 |
 | `syscomtool.llama.searchPaths` | `[]` | 「自动搜索」额外扫描的目录 |
 | `syscomtool.update.checkOnStartup` | `true` | 启动时检查更新（24 小时节流） |
@@ -101,9 +131,14 @@ SysComTool/
 │  ├─ services/
 │  │  ├─ store.ts              # globalState 持久化，写入串行化
 │  │  ├─ llama/
-│  │  │  ├─ detect.ts          # 找可执行文件、解析 --version
+│  │  │  ├─ detect.ts          # 找可执行文件、解析 --version 与 GPU 后端
 │  │  │  ├─ command.ts         # 参数 → argv → 命令行（纯函数）
 │  │  │  └─ runs.ts            # 并发队列、输出缓冲、终止
+│  │  ├─ chart/
+│  │  │  ├─ parse.ts           # CSV / Markdown 表格解析 + 列类型推断
+│  │  │  ├─ scale.ts           # 整齐刻度、LTTB 降采样
+│  │  │  ├─ path.ts            # 折线 / 单调三次平滑 / 面积路径
+│  │  │  └─ model.ts           # 列 + 图型 → 可直接画的 SVG 几何
 │  │  └─ update/
 │  │     ├─ check.ts           # 版本比较、Release 解析、挑资产（纯函数）
 │  │     ├─ updater.ts         # 下载 + code --install-extension
@@ -112,11 +147,13 @@ SysComTool/
 │  │  ├─ featureListView.ts    # 左侧栏 WebviewView
 │  │  ├─ sidebarHtml.ts        # 搜索 + 分组
 │  │  ├─ llamaPanel.ts         # llama 面板控制器
-│  │  └─ llamaHtml.ts          # llama 面板界面
+│  │  ├─ llamaHtml.ts          # llama 面板界面
+│  │  ├─ chartPanel.ts         # 出图面板控制器（打开文件 / 导出）
+│  │  └─ chartHtml.ts          # 出图面板界面（控件 + SVG 渲染）
 │  └─ features/                # 一个功能一个文件
 │     ├─ index.ts              # createFeatures()：清单 + 依赖注入
-│     ├─ hello.ts / llama.ts / update.ts
-│  └─ test/                    # node:test，42 个用例
+│     ├─ hello.ts / llama.ts / chart.ts / update.ts
+│  └─ test/                    # node:test，87 个用例
 ├─ docs/                       # 架构、加功能指南
 ├─ media/                      # 活动栏图标
 ├─ .github/workflows/
