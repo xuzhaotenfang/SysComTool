@@ -1,8 +1,8 @@
 {
   "name": "syscomtool",
   "displayName": "SysComTool",
-  "description": "proj59 辅助工具集：左侧栏搜索功能，内置图形化 llama.cpp 运行器",
-  "version": "0.3.0",
+  "description": "proj59 辅助工具集：左侧栏搜索功能，内置图形化 llama.cpp 运行器与数据出图",
+  "version": "0.3.1",
   "publisher": "xuzhaotenfang",
   "license": "MIT",
   "repository": {
@@ -35,6 +35,11 @@
       {
         "command": "syscomtool.llama",
         "title": "图形化 llama.cpp",
+        "category": "SysComTool"
+      },
+      {
+        "command": "syscomtool.chart",
+        "title": "数据出图",
         "category": "SysComTool"
       },
       {
@@ -102,6 +107,13 @@
           },
           "default": [],
           "description": "「自动搜索」额外扫描的目录（工作区之外的 llama.cpp 放这里）"
+        },
+        "syscomtool.chart.maxPoints": {
+          "type": "number",
+          "default": 3000,
+          "minimum": 100,
+          "maximum": 20000,
+          "description": "出图时最多保留多少数据点，超出按 LTTB 降采样（柱状图按步长抽样）"
         },
         "syscomtool.update.checkOnStartup": {
           "type": "boolean",
