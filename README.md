@@ -23,7 +23,7 @@ llama.cpp 那个功能可以同时跑多个任务，关掉面板也不会中断�
 ```powershell
 npm install
 npm run package
-code --install-extension syscomtool-0.3.2.vsix --force
+code --install-extension syscomtool-0.3.3.vsix --force
 ```
 
 之后**不用再手动装**：仓库里打了 `v*` 标签时，
@@ -89,8 +89,8 @@ npm run watch      # 或 Ctrl+Shift+B
 2. **选列与图型**：X 可以选任意列（数值或分类），Y 只能选数值列，还可以再选一个**分组列**，
    把同一张图拆成多条曲线（比如 `test` 列里的 `pp512` / `tg128`）。
    表头下面会给出预览和规模，列数不齐、表头为空/重名都会提示。
-3. **看图 / 导出**：图下面显示实际用了多少行、分成几条序列、是否降采样；
-   可以「复制 SVG」「保存 SVG」「导出数据 CSV」（分组时会一并导出分组列）。
+3. **看图 / 导出**：面板里是 SVG 预览（跟随主题、悬停可看原值）；
+   导出走 Python + matplotlib，可选 PNG / SVG / PDF，另有「导出数据 CSV」（分组时会带上分组列）。
 
 默认选列是猜的，规则写在 `services/chart/infer.ts`：X 取第一个「真在变」的数值列，
 Y 取最后一个在变的数值列，分组取取值 2–12 种的文本列。猜错了直接改下拉框即可。
@@ -123,11 +123,24 @@ Y 取最后一个在变的数值列，分组取取值 2–12 种的文本列。�
 - **分组有上限**：超过 12 组时保留前 11 组、其余并成「其他」，否则图例会挤成一团。
 - 图是 SVG，导出后在任意文档里都是矢量。
 
+### 导出为什么走 matplotlib
+
+面板里的 SVG 用了 `var(--vscode-*)` 主题变量，离开编辑器就没有样式，存下来并不好看。
+所以「保存图片…」改成：把当前选择（X/Y/分组/图型）整理成一份数据规格 → 交给 Python 的
+matplotlib 画 → 直接写出图片。
+
+- 支持 **PNG / SVG / PDF**（按保存时的扩展名决定，都是矢量优先的 matplotlib 输出）；
+- 需要本机有 Python + matplotlib：`pip install matplotlib`；
+- 解释器自动探测 `python` → `py -3` → `python3`，也可以在设置里指定
+  `syscomtool.chart.pythonPath`（比如 Conda 环境里的 python.exe）；
+- 中文标签会自动挑系统里的中文字体（微软雅黑 / 黑体 / Noto），不会出现方块；
+- 导出失败时会把 Python 的报错尾部直接显示出来，并写进日志，不会静默失败。
 ## 配置
 
 | 配置项 | 默认 | 说明 |
 | --- | --- | --- |
 | `syscomtool.chart.maxPoints` | `3000` | 出图最多保留多少点，超出按 LTTB / 步长降采样 |
+| `syscomtool.chart.pythonPath` | 空（自动探测） | 导出图片用的 Python 解释器 |
 | `syscomtool.llama.maxConcurrent` | `3` | 同时运行几个 llama 任务 |
 | `syscomtool.llama.searchPaths` | `[]` | 「自动搜索」额外扫描的目录 |
 | `syscomtool.update.checkOnStartup` | `true` | 启动时检查更新（24 小时节流） |
@@ -154,6 +167,9 @@ SysComTool/
 │  │  ├─ chart/
 │  │  │  ├─ parse.ts           # CSV / Markdown 表格解析、列类型推断、± 与单位取值
 │  │  │  ├─ infer.ts           # 猜默认 X / Y / 分组列
+│  │  │  ├─ spec.ts            # 数据空间规格（预览与导出共用）
+│  │  │  ├─ renderScript.ts    # matplotlib 脚本模板
+│  │  │  ├─ python.ts          # 探测 Python、写脚本、跑导出
 │  │  │  ├─ scale.ts           # 整齐刻度、LTTB 降采样
 │  │  │  ├─ path.ts            # 折线 / 单调三次平滑 / 面积路径
 │  │  │  └─ model.ts           # 列 + 图型 + 分组 → 可直接画的 SVG 几何
@@ -171,7 +187,7 @@ SysComTool/
 │  └─ features/                # 一个功能一个文件
 │     ├─ index.ts              # createFeatures()：清单 + 依赖注入
 │     ├─ hello.ts / llama.ts / chart.ts / update.ts
-│  └─ test/                    # node:test，100 个用例
+│  └─ test/                    # node:test，114 个用例
 ├─ docs/                       # 架构、加功能指南
 ├─ media/                      # 活动栏图标
 ├─ .github/workflows/

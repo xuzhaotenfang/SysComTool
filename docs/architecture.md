@@ -122,13 +122,13 @@ start() ──▶ queued ──(有槽位)──▶ running ──▶ succeeded 
    │ parse.ts      分隔符嗅探、引号与转义、Markdown 对齐行、列类型推断
    ▼
 Dataset { columns[](name,kind), rows[][], warnings }
-   │ model.ts      选列 → 过滤空值 → 排序/降采样 → 刻度 → 像素坐标
-   ▼
-ChartModel { plot, x/y.ticks, series(path|points|bars), meta }
-   │ chartHtml.ts  只做 DOM/SVG 绘制 + 悬停提示
-   ▼
-SVG（可复制、可保存、可导出对应 CSV）
+   │ spec.ts       选列 → 过滤空值 → 分组 → 排序（数据空间，不算像素）
+   ├──────────────► model.ts → 像素坐标 + 刻度 → chartHtml.ts 画 SVG（面板预览）
+   │
+   └──────────────► chart-spec.json + render_chart.py → Python/matplotlib → PNG/SVG/PDF
 ```
+
+两条路共用 `spec.ts`，所以「面板看到的」和「导出的」是同一批数据、同一套排序与分组规则。
 
 几个刻意的决定：
 
@@ -141,7 +141,11 @@ SVG（可复制、可保存、可导出对应 CSV）
 - **数值抽取**：`381.06 ± 92.53` 取均值、`8.37 GiB` 取数字，但原始文本保留在模型里（悬停显示原值），日期/枚举不会被误判；
 - **多序列**：按一列分组时，同一 X 下的多条曲线各自降采样、共享坐标轴；组数超过 12 时其余并成「其他」，避免图例爆炸；
 - **降采样**：数值 X 用 LTTB（保峰谷），分类 X 用步长抽样，上限来自 `chart.maxPoints`；
-- **导出**：SVG 是矢量、无依赖；CSV 导出的是「当前 X/Y 这一对列」，方便别人复现图。
+- **预览用 SVG、导出用 matplotlib**：面板的 SVG 依赖 `var(--vscode-*)` 主题变量，
+  存成文件后没有样式（这是上一版导出难看的原因）；导出改成把 `spec` 写成 JSON，
+  由固定的 Python 脚本绘图，字体、网格、图例都按出版习惯设置。
+  脚本是常量模板，用户数据只经 argv 的 JSON 文件传入，不做字符串拼接；
+- **CSV 导出**：导的是「当前 X/Y 这一对列」（有分组时带分组列），方便别人复现图。
 
 ## 更新子系统
 
