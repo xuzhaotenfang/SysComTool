@@ -1,9 +1,12 @@
 import { promises as fs } from 'node:fs';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { Logger } from '../core/types';
 import { buildChartModel, type ChartOptions, type ChartType } from '../services/chart/model';
 import { inferDefaults } from '../services/chart/infer';
 import { parseTabularData, previewDataset, toNumber, type Dataset } from '../services/chart/parse';
+import { findPython, renderFigure, type PythonRunner } from '../services/chart/python';
+import { buildChartSpec } from '../services/chart/spec';
 import { renderChartHtml, sampleDataset, type ChartPanelState } from './chartHtml';
 import { createNonce } from './webview';
 
@@ -15,11 +18,13 @@ export interface ChartPanelDeps {
 const CHART_TYPES: readonly ChartType[] = ['line', 'smooth', 'scatter', 'bar', 'area'];
 const PREVIEW_ROWS = 10;
 
-/** 数据出图面板：解析 → 选列 → 画图 → 导出。 */
+/** 数据出图面板：解析 → 选列（SVG 预览）→ 用 matplotlib 导出图片。 */
 export class ChartPanel {
   private panel?: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[] = [];
   private dataset?: Dataset;
+  /** undefined = 还没探测；null = 探测过但没有可用 Python */
+  private python?: PythonRunner | null;
 
   constructor(private readonly deps: ChartPanelDeps) {}
 
@@ -120,11 +125,8 @@ export class ChartPanel {
       case 'render':
         this.render(message.options);
         return;
-      case 'copySvg':
-        await this.copySvg(message.svg);
-        return;
-      case 'saveSvg':
-        await this.saveSvg(message.svg);
+      case 'saveFigure':
+        await this.saveFigure(message.options);
         return;
       case 'saveCsv':
         await this.saveCsv(message.options);
@@ -242,35 +244,100 @@ export class ChartPanel {
     this.post({ type: 'chart', model: result.model });
   }
 
-  private async copySvg(svg: unknown): Promise<void> {
-    if (typeof svg !== 'string' || svg.trim() === '') {
+  /**
+   * 导出图片：交给 Python + matplotlib 画，而不是把面板里的 SVG 存下来。
+   * 面板里的 SVG 依赖 VS Code 的主题变量，离开编辑器就没有样式了。
+   */
+  private async saveFigure(rawOptions: unknown): Promise<void> {
+    if (!this.dataset) {
       return;
     }
-    await vscode.env.clipboard.writeText(svg);
-    void vscode.window.setStatusBarMessage('SysComTool：SVG 已复制', 3000);
-  }
+    const options = this.normalizeOptions(rawOptions);
+    if (!options) {
+      return;
+    }
 
-  private async saveSvg(svg: unknown): Promise<void> {
-    if (typeof svg !== 'string' || svg.trim() === '') {
+    const specResult = buildChartSpec(this.dataset, options);
+    if (!specResult.ok) {
+      this.post({ type: 'error', message: specResult.error });
       return;
     }
 
     const target = await vscode.window.showSaveDialog({
-      saveLabel: '保存 SVG',
-      filters: { SVG: ['svg'] },
-      defaultUri: this.defaultUri('chart.svg'),
+      saveLabel: '保存图片',
+      filters: { PNG: ['png'], SVG: ['svg'], PDF: ['pdf'] },
+      defaultUri: this.defaultUri('chart.png'),
     });
     if (!target) {
       return;
     }
 
+    const python = await this.resolvePython();
+    if (!python) {
+      const choice = await vscode.window.showErrorMessage(
+        '找不到带 matplotlib 的 Python。装一下 matplotlib，或在设置里指定 Python 路径。',
+        '打开设置',
+        '安装命令',
+      );
+      if (choice === '打开设置') {
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'syscomtool.chart.pythonPath');
+      } else if (choice === '安装命令') {
+        await vscode.env.clipboard.writeText('pip install matplotlib');
+        void vscode.window.showInformationMessage('已复制：pip install matplotlib');
+      }
+      return;
+    }
+
     try {
-      await fs.writeFile(target.fsPath, svg, 'utf8');
-      void vscode.window.showInformationMessage(`图表已保存：${target.fsPath}`);
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: '正在用 matplotlib 出图…',
+          cancellable: false,
+        },
+        async () => {
+          await renderFigure({
+            python,
+            storageDir: path.join(this.deps.context.globalStorageUri.fsPath, 'chart'),
+            spec: specResult.spec,
+            outPath: target.fsPath,
+          });
+        },
+      );
+
+      this.deps.logger.info(`图表已导出：${target.fsPath}（${python.command}）`);
+      const open = await vscode.window.showInformationMessage(
+        `图片已保存：${target.fsPath}`,
+        '打开',
+        '复制路径',
+      );
+      if (open === '打开') {
+        await vscode.env.openExternal(target);
+      } else if (open === '复制路径') {
+        await vscode.env.clipboard.writeText(target.fsPath);
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      void vscode.window.showErrorMessage(`保存失败：${reason}`);
+      this.deps.logger.error(`导出图片失败：${reason}`);
+      void vscode.window.showErrorMessage(`导出图片失败：${reason}`);
     }
+  }
+
+  private async resolvePython(): Promise<PythonRunner | undefined> {
+    if (this.python !== undefined) {
+      return this.python ?? undefined;
+    }
+    const configured = vscode.workspace
+      .getConfiguration('syscomtool')
+      .get<string>('chart.pythonPath', '');
+    const found = await findPython(configured);
+    this.python = found ?? null;
+    if (found) {
+      this.deps.logger.info(`导出使用 Python：${found.command} ${found.args.join(' ')}`.trim());
+    } else {
+      this.deps.logger.warn('找不到带 matplotlib 的 Python，导出图片不可用');
+    }
+    return found;
   }
 
   private async saveCsv(rawOptions: unknown): Promise<void> {

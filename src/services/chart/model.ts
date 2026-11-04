@@ -1,13 +1,14 @@
 /**
- * 把「数据集 + 选中的列」变成可以直接画的一堆几何数据。
+ * 把「数据集 + 选中的列」变成可以直接画的几何数据（像素坐标）。
  *
- * 坐标已经换算成 SVG 像素，视图层只负责画，不做数学 —— 这样模型可以单测。
- * 支持按一列拆成多条序列（同一个 X 对比 pp512 / tg128 这类场景）。
+ * 选列、过滤、分组、排序全部交给 `spec.ts`，这里只负责换算成像素、降采样和刻度 ——
+ * 这样面板预览（SVG）和 Python 导出（matplotlib）用的是同一份数据。
  */
 
 import { areaPath, polylinePath, smoothPath } from './path';
-import { toNumber, type Dataset } from './parse';
+import type { Dataset } from './parse';
 import { lttb, niceScale, type Point } from './scale';
+import { buildChartSpec } from './spec';
 
 export type ChartType = 'line' | 'smooth' | 'scatter' | 'bar' | 'area';
 
@@ -89,9 +90,6 @@ export const SERIES_COLORS = [
   '#ce9178',
 ];
 
-const MAX_GROUPS = 12;
-const OTHER = '其他';
-
 const MARGIN = { left: 74, right: 26, top: 34, bottom: 60 };
 const PLOT = {
   left: MARGIN.left,
@@ -102,87 +100,30 @@ const PLOT = {
 
 export type ModelResult = { ok: true; model: ChartModel } | { ok: false; error: string };
 
-const TYPES: readonly ChartType[] = ['line', 'smooth', 'scatter', 'bar', 'area'];
-
-interface Row {
-  xText: string;
-  xNum?: number;
-  y: number;
-  yText: string;
-  group: string;
-}
-
 export function buildChartModel(dataset: Dataset, options: ChartOptions): ModelResult {
-  const xColumn = dataset.columns[options.xIndex];
-  const yColumn = dataset.columns[options.yIndex];
-
-  if (!xColumn || !yColumn) {
-    return { ok: false, error: 'X / Y 列选错了：请重新选择' };
+  const specResult = buildChartSpec(dataset, options);
+  if (!specResult.ok) {
+    return specResult;
   }
-  if (yColumn.kind !== 'number') {
-    return { ok: false, error: `Y 必须选数值列，「${yColumn.name}」不是数值` };
-  }
-  if (!TYPES.includes(options.type)) {
-    return { ok: false, error: `不认识的图型「${options.type}」` };
-  }
+  const spec = specResult.spec;
+  const numericX = spec.xKind === 'number';
+  const categoryCount = Math.max(spec.categories.length, 1);
 
-  const groupColumn =
-    options.groupIndex !== undefined && options.groupIndex >= 0
-      ? dataset.columns[options.groupIndex]
-      : undefined;
-
-  const numericX = xColumn.kind === 'number';
-  const source = dataset.rows.length;
-  const rows: Row[] = [];
-  let dropped = 0;
-
-  for (const row of dataset.rows) {
-    const yText = (row[options.yIndex] ?? '').trim();
-    const y = toNumber(yText);
-    if (y === undefined) {
-      dropped += 1;
-      continue;
-    }
-
-    const xText = (row[options.xIndex] ?? '').trim();
-    if (xText === '') {
-      dropped += 1;
-      continue;
-    }
-
-    let xNum: number | undefined;
-    if (numericX) {
-      xNum = toNumber(xText);
-      if (xNum === undefined) {
-        dropped += 1;
-        continue;
-      }
-    }
-
-    const group = groupColumn ? ((row[options.groupIndex as number] ?? '').trim() || '(空)') : '';
-    rows.push({ xText, xNum, y, yText, group });
-  }
-
-  if (rows.length === 0) {
-    return { ok: false, error: '没有可用的数据点：检查 X / Y 列是否选对，以及是否有空值' };
-  }
-
-  const groups = collectGroups(rows, groupColumn !== undefined);
-  const categoryLabels = numericX ? [] : uniqueLabels(rows);
-
-  const xValues = rows.map((row) => (numericX ? (row.xNum as number) : categoryLabels.indexOf(row.xText)));
-  const xScale = niceScale(
-    numericX ? Math.min(...xValues) : 0,
-    numericX ? Math.max(...xValues) : Math.max(categoryLabels.length - 1, 1),
-    numericX ? 8 : Math.max(categoryLabels.length, 2),
+  const allY = spec.series.flatMap((line) => line.points.map((point) => point.y));
+  const needsZero = options.type === 'bar' || options.type === 'area';
+  const yScale = niceScale(
+    Math.min(...allY, ...(needsZero ? [0] : [])),
+    Math.max(...allY, ...(needsZero ? [0] : [])),
+    6,
   );
 
-  const needsZero = options.type === 'bar' || options.type === 'area';
-  const yValues = rows.map((row) => row.y);
-  const yScale = niceScale(
-    Math.min(...yValues, ...(needsZero ? [0] : [])),
-    Math.max(...yValues, ...(needsZero ? [0] : [])),
-    6,
+  const xNumbers = numericX
+    ? spec.series.flatMap((line) => line.points.map((point) => point.x as number))
+    : [];
+  const xScale = niceScale(
+    numericX ? Math.min(...xNumbers) : 0,
+    numericX ? Math.max(...xNumbers) : Math.max(categoryCount - 1, 1),
+    numericX ? 8 : categoryCount,
   );
 
   const toX = (value: number): number =>
@@ -190,14 +131,16 @@ export function buildChartModel(dataset: Dataset, options: ChartOptions): ModelR
   const toY = (value: number): number =>
     PLOT.bottom - ((value - yScale.min) / (yScale.max - yScale.min || 1)) * (PLOT.bottom - PLOT.top);
 
-  const xPosOf = (row: Row): number => {
-    if (numericX) {
-      return toX(row.xNum as number);
-    }
-    const index = categoryLabels.indexOf(row.xText);
-    const band = (PLOT.right - PLOT.left) / Math.max(categoryLabels.length, 1);
-    return PLOT.left + band * (index + 0.5);
+  const band = (PLOT.right - PLOT.left) / categoryCount;
+  const categoryX = (label: string): number => {
+    const index = spec.categories.indexOf(label);
+    return PLOT.left + band * (Math.max(index, 0) + 0.5);
   };
+
+  const groupCount = Math.max(spec.series.length, 1);
+  const barWidth = numericX
+    ? Math.max(1.5, Math.min(22, (PLOT.right - PLOT.left) / Math.max(spec.meta.used, 1) / groupCount))
+    : Math.max(1, (band * 0.8) / groupCount);
 
   const series: SeriesModel[] = [];
   const legend: ChartModel['legend'] = [];
@@ -205,45 +148,37 @@ export function buildChartModel(dataset: Dataset, options: ChartOptions): ModelR
   let downsampled = 0;
   let smoothFellBack = false;
 
-  const groupCount = Math.max(groups.size, 1);
-  const band = (PLOT.right - PLOT.left) / Math.max(categoryLabels.length, 1);
-  const barWidth = numericX
-    ? Math.max(1.5, Math.min(22, (PLOT.right - PLOT.left) / Math.max(rows.length, 1) / groupCount))
-    : Math.max(1, (band * 0.8) / groupCount);
+  spec.series.forEach((line, lineIndex) => {
+    const color = SERIES_COLORS[lineIndex % SERIES_COLORS.length];
+    const offset = (lineIndex - (groupCount - 1) / 2) * barWidth;
 
-  let groupIndex = 0;
-  for (const [name, groupRows] of groups) {
-    const label = groupColumn ? name : yColumn.name;
-    const color = SERIES_COLORS[groupIndex % SERIES_COLORS.length];
-    const offset = (groupIndex - (groupCount - 1) / 2) * barWidth;
+    const raw = line.points.map((point) => ({ x: point.x, y: point.y, label: point }));
 
-    let orderedRows: Row[] = groupRows;
-    if (numericX && options.sortByX) {
-      orderedRows = [...groupRows].sort((left, right) => (left.xNum as number) - (right.xNum as number));
-    }
-
-    let sampled: Array<{ row: Row; x: number; y: number }> = orderedRows.map((row) => ({
-      row,
-      x: numericX ? (row.xNum as number) : 0,
-      y: row.y,
-    }));
-
-    const originalCount = sampled.length;
+    let sampled: Array<{ x: string | number; y: number; label: (typeof raw)[number]['label'] }> = raw;
+    const originalCount = raw.length;
     if (options.maxPoints > 0 && originalCount > options.maxPoints) {
-      sampled = numericX ? lttb(sampled, options.maxPoints) : stride(sampled, options.maxPoints);
+      if (numericX) {
+        const numeric = raw.map((entry) => ({ x: entry.x as number, y: entry.y, label: entry.label }));
+        sampled = lttb(numeric, options.maxPoints);
+      } else {
+        sampled = stride(raw, options.maxPoints);
+      }
       downsampled += originalCount;
     }
     used += sampled.length;
 
-    const points: ChartPoint[] = sampled.map(({ row }) => ({
-      x: round(xPosOf(row) + (options.type === 'bar' ? offset : 0)),
-      y: round(toY(row.y)),
-      vx: row.xText,
-      vy: row.yText,
-      series: label,
+    const points: ChartPoint[] = sampled.map((entry) => ({
+      x: round(
+        (numericX ? toX(entry.x as number) : categoryX(entry.label.x as string)) +
+          (options.type === 'bar' ? offset : 0),
+      ),
+      y: round(toY(entry.y)),
+      vx: entry.label.xLabel,
+      vy: entry.label.yLabel,
+      series: line.name,
     }));
 
-    const model: SeriesModel = { name: label, color };
+    const model: SeriesModel = { name: line.name, color };
     if (options.type === 'scatter') {
       model.points = points;
     } else if (options.type === 'bar') {
@@ -254,7 +189,7 @@ export function buildChartModel(dataset: Dataset, options: ChartOptions): ModelR
         height: round(PLOT.bottom - point.y),
         vx: point.vx,
         vy: point.vy,
-        series: label,
+        series: line.name,
       }));
     } else {
       const isSmooth = options.type === 'smooth' && numericX;
@@ -269,23 +204,16 @@ export function buildChartModel(dataset: Dataset, options: ChartOptions): ModelR
     }
 
     series.push(model);
-    legend.push({ name: label, color });
-    groupIndex += 1;
-  }
-
-  const categoryTicks = buildCategoryTicks(categoryLabels, (index) => {
-    const bandWidth = (PLOT.right - PLOT.left) / Math.max(categoryLabels.length, 1);
-    return PLOT.left + bandWidth * (index + 0.5);
+    legend.push({ name: line.name, color });
   });
 
-  const note = buildNote({
-    dropped,
-    downsampled,
-    original: source,
-    used,
-    groups: groups.size,
-    smoothFellBack,
-  });
+  const labelStep = Math.max(1, Math.ceil(categoryCount / 14));
+  const categoryTicks = numericX
+    ? []
+    : spec.categories
+        .map((label, index) => ({ value: label, index, pos: round(PLOT.left + band * (index + 0.5)) }))
+        .filter((tick) => tick.index % labelStep === 0)
+        .map((tick) => ({ value: tick.value, pos: tick.pos }));
 
   return {
     ok: true,
@@ -297,82 +225,32 @@ export function buildChartModel(dataset: Dataset, options: ChartOptions): ModelR
       x: numericX
         ? {
             kind: 'number',
-            title: xColumn.name,
+            title: spec.xLabel,
             ticks: xScale.ticks.map((value) => ({ value: formatNumber(value), pos: round(toX(value)) })),
           }
-        : { kind: 'category', title: xColumn.name, ticks: categoryTicks },
+        : { kind: 'category', title: spec.xLabel, ticks: categoryTicks },
       y: {
-        title: yColumn.name,
+        title: spec.yLabel,
         ticks: yScale.ticks.map((value) => ({ value: formatNumber(value), pos: round(toY(value)) })),
       },
       series,
       legend,
       meta: {
-        source,
+        source: spec.meta.rows,
         used,
-        dropped,
+        dropped: spec.meta.dropped,
         downsampled,
-        groups: groups.size,
-        note,
+        groups: spec.meta.groups,
+        note: buildNote({
+          dropped: spec.meta.dropped,
+          downsampled,
+          used: used,
+          groups: spec.meta.groups,
+          smoothFellBack,
+        }),
       },
     },
   };
-}
-
-function collectGroups(rows: Row[], grouped: boolean): Map<string, Row[]> {
-  const groups = new Map<string, Row[]>();
-
-  for (const row of rows) {
-    const key = grouped ? row.group : '';
-    const bucket = groups.get(key);
-    if (bucket) {
-      bucket.push(row);
-    } else {
-      groups.set(key, [row]);
-    }
-  }
-
-  if (groups.size <= MAX_GROUPS) {
-    return groups;
-  }
-
-  // 分组太多会把图挤成一团：保留前若干组，其余并进「其他」
-  const trimmed = new Map<string, Row[]>();
-  let index = 0;
-  for (const [key, value] of groups) {
-    if (index < MAX_GROUPS - 1) {
-      trimmed.set(key, value);
-    } else {
-      const rest = trimmed.get(OTHER) ?? [];
-      trimmed.set(OTHER, rest.concat(value));
-    }
-    index += 1;
-  }
-  return trimmed;
-}
-
-function uniqueLabels(rows: Row[]): string[] {
-  const seen = new Set<string>();
-  const labels: string[] = [];
-  for (const row of rows) {
-    if (!seen.has(row.xText)) {
-      seen.add(row.xText);
-      labels.push(row.xText);
-    }
-  }
-  return labels;
-}
-
-function buildCategoryTicks(
-  labels: string[],
-  position: (index: number) => number,
-): Array<{ value: string; pos: number }> {
-  const step = Math.max(1, Math.ceil(labels.length / 14));
-  const ticks: Array<{ value: string; pos: number }> = [];
-  for (let index = 0; index < labels.length; index += step) {
-    ticks.push({ value: labels[index], pos: round(position(index)) });
-  }
-  return ticks;
 }
 
 function stride<T>(items: readonly T[], limit: number): T[] {
@@ -391,7 +269,6 @@ function round(value: number): number {
 function buildNote(input: {
   dropped: number;
   downsampled: number;
-  original: number;
   used: number;
   groups: number;
   smoothFellBack: boolean;

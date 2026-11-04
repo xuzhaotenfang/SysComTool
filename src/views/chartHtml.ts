@@ -150,10 +150,12 @@ svg.chart { width: 100%; height: auto; display: block; }
   <div class="card-head">
     <span>3. 图</span>
     <div class="actions">
-      <button id="copySvg" class="ghost">复制 SVG</button>
-      <button id="saveSvg" class="ghost">保存 SVG</button>
+      <button id="saveFigure" class="primary">保存图片…</button>
       <button id="saveCsv" class="ghost">导出数据 CSV</button>
     </div>
+  </div>
+  <div class="meta" style="margin-bottom: 6px">
+    图在面板里是 SVG 预览（跟随主题）；导出走 Python + matplotlib，可选 PNG / SVG / PDF。
   </div>
   <div class="chart-box" id="chartBox">
     <svg class="chart" id="chart" viewBox="0 0 900 520" preserveAspectRatio="xMidYMid meet"></svg>
@@ -405,14 +407,9 @@ for (const id of ['xSelect', 'ySelect', 'groupSelect', 'typeSelect', 'sortByX'])
   $(id).addEventListener('change', requestRender);
 }
 
-$('copySvg').addEventListener('click', () => {
-  const svg = document.getElementById('chart');
-  if (svg) vscode.postMessage({ type: 'copySvg', svg: svg.outerHTML });
-});
-$('saveSvg').addEventListener('click', () => {
-  const svg = document.getElementById('chart');
-  if (svg) vscode.postMessage({ type: 'saveSvg', svg: svg.outerHTML });
-});
+$('saveFigure').addEventListener('click', () =>
+  vscode.postMessage({ type: 'saveFigure', options: collectOptions() }),
+);
 $('saveCsv').addEventListener('click', () => vscode.postMessage({ type: 'saveCsv', options: collectOptions() }));
 
 window.addEventListener('message', (event) => {
