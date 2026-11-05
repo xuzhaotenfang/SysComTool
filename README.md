@@ -10,7 +10,8 @@ llama.cpp 那个功能可以同时跑多个任务，关掉面板也不会中断�
 | 能力 | 说明 |
 | --- | --- |
 | 左侧栏功能面板 | 搜索框按名字/说明过滤，功能按 `category` 分组；点一项即执行 |
-| 数据出图 | CSV / Markdown 表格 / 粘贴数据，选一个自变量与一个因变量，出折线、平滑曲线、散点、柱状、面积图；可导出 SVG 与 CSV |
+| 建模计算 | LaTeX 公式套到 CSV：因子绑列或取常量，逐行算出新列，可导出或直接出图 |
+| 数据出图 | CSV / Markdown 表格 / 粘贴数据，选一个自变量与一个因变量，出折线、平滑曲线、散点、柱状、面积图；导出走 matplotlib（PNG / SVG / PDF） |
 | 图形化 llama.cpp | 自动搜索/手动指定编译好的 llama.cpp，识别版本并存为「选项」；选模型、填参数、预览命令、复制、在终端跑、在面板里跑 |
 | 多任务并行 | 运行有并发上限（默认 3），超出的排队；每个任务独立输出、独立终止 |
 | 自动更新 | 启动时静默检查 GitHub Releases（24 小时节流），也可随时手动「检查更新」 |
@@ -23,7 +24,7 @@ llama.cpp 那个功能可以同时跑多个任务，关掉面板也不会中断�
 ```powershell
 npm install
 npm run package
-code --install-extension syscomtool-0.3.3.vsix --force
+code --install-extension syscomtool-0.3.4.vsix --force
 ```
 
 之后**不用再手动装**：仓库里打了 `v*` 标签时，
@@ -135,6 +136,46 @@ matplotlib 画 → 直接写出图片。
   `syscomtool.chart.pythonPath`（比如 Conda 环境里的 python.exe）；
 - 中文标签会自动挑系统里的中文字体（微软雅黑 / 黑体 / Noto），不会出现方块；
 - 导出失败时会把 Python 的报错尾部直接显示出来，并写进日志，不会静默失败。
+## 建模计算怎么用
+
+命令面板 → `SysComTool: 建模计算`。适合把论文里的模型（公式）直接套到实验数据上算新列。
+
+1. **给数据**：和出图一样，打开 CSV / 粘贴 / 示例。
+2. **写公式**：每行一条 `名字 = 表达式`，LaTeX 可以直接粘：
+
+   ```latex
+   y = \frac{a x}{1 + b t}
+   z = \sqrt{x^{2} + y^{2}}
+   ```
+
+   会先归一化成 `((a*x)/(1 + b*t))`、`sqrt(x^(2) + y^(2))`，再逐行求值。
+   上一条公式的结果可以在后面的公式里直接当因子用（`z` 用了 `y`）。
+3. **绑定因子**：每个变量的下拉框里选「列：xxx」或「常量」，常量直接在右边填数。
+   同名变量会自动绑到同名列，其余默认常量 1。
+4. **看结果 / 导出**：面板显示成功率、前 15 行预览、出错行（第几行、哪条公式、为什么）；
+   可以「导出结果 CSV」（原列 + 新列），或「用结果出图」直接跳到出图面板。
+
+LaTeX 支持范围（常用写法，不是完整 TeX）：
+
+| 写法 | 归一化结果 |
+| --- | --- |
+| `\frac{a}{b}`、嵌套 `\frac` | `((a)/(b))` |
+| `\sqrt{x}`、`\sqrt[3]{x}` | `sqrt(x)`、`pow((x), 1/(3))` |
+| `x^{2}`、`x_{1}` | `x^(2)`、`x_1` |
+| `a \cdot b`、`a \times b`、`a \div b` | `a * b`、`a * b`、`a / b` |
+| `2x`、`a x`、`(a+b)(c+d)` | 自动补乘号 |
+| `\ln x`、`\log_{10} x` | `ln(x)`、`log10(x)` |
+| `\alpha`、`\beta` … | `alpha`、`beta` … |
+| `\begin{aligned} … \end{aligned}`、`\\` 换行、`&` 对齐 | 拆成逐条公式 |
+
+可用函数：`sqrt cbrt exp ln log log10 log2 abs floor ceil round sign sin cos tan asin acos atan min max pow clamp mod`；
+常量：`pi e tau`。
+
+几点行为说明：
+
+- **除以 0、`sqrt` 负数、未绑定变量**：只影响那一行，结果留空并在错误列表里写清原因，不会整表失败；
+- 变量名区分大小写，会被归一化（`\hat{y}` → `y`，`y_{i}` → `y_i`）；
+- 结果数值保留 8 位有效数字，避免 `0.30000000000000004` 这种噪声。
 ## 配置
 
 | 配置项 | 默认 | 说明 |
@@ -173,6 +214,10 @@ SysComTool/
 │  │  │  ├─ scale.ts           # 整齐刻度、LTTB 降采样
 │  │  │  ├─ path.ts            # 折线 / 单调三次平滑 / 面积路径
 │  │  │  └─ model.ts           # 列 + 图型 + 分组 → 可直接画的 SVG 几何
+│  │  ├─ formula/
+│  │  │  ├─ latex.ts       # LaTeX → 表达式归一化
+│  │  │  ├─ expr.ts        # 安全表达式求值（不用 eval）
+│  │  │  └─ compute.ts     # 按列/常量逐行计算
 │  │  └─ update/
 │  │     ├─ check.ts           # 版本比较、Release 解析、挑资产（纯函数）
 │  │     ├─ updater.ts         # 下载 + code --install-extension
@@ -183,11 +228,13 @@ SysComTool/
 │  │  ├─ llamaPanel.ts         # llama 面板控制器
 │  │  ├─ llamaHtml.ts          # llama 面板界面
 │  │  ├─ chartPanel.ts         # 出图面板控制器（打开文件 / 导出）
+│  │  ├─ formulaPanel.ts       # 建模计算面板控制器
+│  │  ├─ formulaHtml.ts        # 建模计算界面（公式 + 绑定 + 结果）
 │  │  └─ chartHtml.ts          # 出图面板界面（控件 + SVG 渲染）
 │  └─ features/                # 一个功能一个文件
 │     ├─ index.ts              # createFeatures()：清单 + 依赖注入
-│     ├─ hello.ts / llama.ts / chart.ts / update.ts
-│  └─ test/                    # node:test，114 个用例
+│     ├─ hello.ts / llama.ts / chart.ts / formula.ts / update.ts
+│  └─ test/                    # node:test，144 个用例
 ├─ docs/                       # 架构、加功能指南
 ├─ media/                      # 活动栏图标
 ├─ .github/workflows/
