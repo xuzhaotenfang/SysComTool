@@ -26,13 +26,49 @@ const DELIMITERS = [',', ';', '\t'] as const;
 const INFER_SAMPLE = 300;
 const NUMERIC_RATIO = 0.8;
 
-/** 认不认得出是数字（含整数、小数、科学计数法、正负号） */
-export function isNumericText(value: string): boolean {
+const NUMBER_CORE = '[-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?';
+/** 纯数字 */
+const PLAIN_NUMBER = new RegExp(`^${NUMBER_CORE}$`);
+/** 测量值：`381.06 ± 92.53`（llama-bench 的「均值 ± 标准差」），取均值 */
+const MEASURE = new RegExp(`^(${NUMBER_CORE})\\s*±\\s*${NUMBER_CORE}$`);
+/** 带单位：`8.37 GiB`、`12 ms`、`3.2 GB/s`、`85%` */
+const NUMBER_WITH_UNIT = new RegExp(`^(${NUMBER_CORE})\\s*[A-Za-z%/µΩ·]{1,8}$`);
+
+/**
+ * 从一段文本里取出数值。
+ *
+ * 认得三种写法：纯数字、`均值 ± 标准差`、`数字 + 单位`；
+ * 认不出（或整段是文本）返回 undefined —— 日期、ID 之类不会被误判成数值。
+ */
+export function toNumber(value: string): number | undefined {
   const text = value.trim();
   if (text === '') {
-    return false;
+    return undefined;
   }
-  return Number.isFinite(Number(text));
+
+  if (PLAIN_NUMBER.test(text)) {
+    const parsed = Number(text);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  const measure = MEASURE.exec(text);
+  if (measure) {
+    const parsed = Number(measure[1]);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  const withUnit = NUMBER_WITH_UNIT.exec(text);
+  if (withUnit) {
+    const parsed = Number(withUnit[1]);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  return undefined;
+}
+
+/** 认不认得出是数字（含整数、小数、科学计数法、`±`、带单位） */
+export function isNumericText(value: string): boolean {
+  return toNumber(value) !== undefined;
 }
 
 export function parseTabularData(raw: string): ParseResult {
@@ -45,7 +81,10 @@ export function parseTabularData(raw: string): ParseResult {
   return isMarkdownTable(lines) ? parseMarkdown(parseMarkdownRows(lines)) : parseDelimited(text);
 }
 
-/** 第一行是 `| a | b |`，第二行是 `| --- | --- |` 这种，就当 Markdown 表格 */
+/** 对齐行的单元格：`---`、`--:`、`:--`、`:-:` 都算（llama-bench 输出里常见两横） */
+const SEPARATOR_CELL = /^:?-+:?$/;
+
+/** 第一行是 `| a | b |`，第二行整行都是对齐单元格，就当 Markdown 表格 */
 export function isMarkdownTable(lines: string[]): boolean {
   const candidates = lines.map((line) => line.trim()).filter((line) => line !== '');
   if (candidates.length < 3) {
@@ -54,8 +93,11 @@ export function isMarkdownTable(lines: string[]): boolean {
   if (!candidates[0].startsWith('|') || !candidates[1].startsWith('|')) {
     return false;
   }
-  const cells = splitMarkdownRow(candidates[1]);
-  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+  return isSeparatorRow(splitMarkdownRow(candidates[1]));
+}
+
+function isSeparatorRow(cells: string[]): boolean {
+  return cells.length >= 2 && cells.every((cell) => SEPARATOR_CELL.test(cell.trim()));
 }
 
 export function splitMarkdownRow(line: string): string[] {
@@ -81,9 +123,7 @@ function parseMarkdown(rows: string[][]): ParseResult {
     return { ok: false, error: 'Markdown 表格至少要有表头 + 一行数据' };
   }
 
-  const separatorIndex = rows.findIndex(
-    (row) => row.length > 0 && row.every((cell) => /^:?-{3,}:?$/.test(cell.trim())),
-  );
+  const separatorIndex = rows.findIndex(isSeparatorRow);
   const headerIndex = separatorIndex > 0 ? separatorIndex - 1 : 0;
   const header = rows[headerIndex];
   const body = rows.slice(headerIndex + 1).filter((row, index) => {

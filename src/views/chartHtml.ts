@@ -10,37 +10,33 @@ export interface ChartPanelState {
   options: {
     xIndex: number;
     yIndex: number;
+    groupIndex: number | null;
     type: string;
     sortByX: boolean;
     maxPoints: number;
   };
 }
 
-const SAMPLE = `模型,量化,线程,内存MB,tok/s
-Qwen2.5-72B,Q4_K_M,8,43000,4.2
-Qwen2.5-72B,Q4_K_M,16,43000,6.8
-Qwen2.5-72B,Q4_K_M,24,43000,7.9
-Qwen2.5-72B,Q2_K,8,24000,5.1
-Qwen2.5-72B,Q2_K,16,24000,8.4
-Qwen2.5-72B,Q2_K,24,24000,9.6
-Qwen3-30B-A3B,Q4_K_M,8,18000,18.5
-Qwen3-30B-A3B,Q4_K_M,16,18000,27.3
-Qwen3-30B-A3B,Q4_K_M,24,18000,31.2
-Qwen3-30B-A3B,Q2_K,8,10500,22.1
-Qwen3-30B-A3B,Q2_K,16,10500,33.8
-Qwen3-30B-A3B,Q2_K,24,10500,37.4
-Qwen3-Next-80B-A3B,Q4_K_M,8,46000,3.1
-Qwen3-Next-80B-A3B,Q4_K_M,16,46000,5.4
-Qwen3-Next-80B-A3B,Q4_K_M,24,46000,6.6
-Qwen3-Next-80B-A3B,Q2_K,8,26000,4.0
-Qwen3-Next-80B-A3B,Q2_K,16,26000,7.2
-Qwen3-Next-80B-A3B,Q2_K,24,26000,8.1`;
+const SAMPLE = `| model | size | params | backend | ngl | test | t/s |
+| --- | ---: | ---: | --- | --: | --- | ---: |
+| qwen2 14B Q4_K - Medium | 8.37 GiB | 14.77 B | CUDA | 0 | pp512 | 381.06 ± 92.53 |
+| qwen2 14B Q4_K - Medium | 8.37 GiB | 14.77 B | CUDA | 0 | tg128 | 7.84 ± 0.14 |
+| qwen2 14B Q4_K - Medium | 8.37 GiB | 14.77 B | CUDA | 10 | pp512 | 489.91 ± 41.43 |
+| qwen2 14B Q4_K - Medium | 8.37 GiB | 14.77 B | CUDA | 10 | tg128 | 9.72 ± 0.02 |
+| qwen2 14B Q4_K - Medium | 8.37 GiB | 14.77 B | CUDA | 20 | pp512 | 599.22 ± 10.15 |
+| qwen2 14B Q4_K - Medium | 8.37 GiB | 14.77 B | CUDA | 20 | tg128 | 11.87 ± 0.06 |
+| qwen2 14B Q4_K - Medium | 8.37 GiB | 14.77 B | CUDA | 30 | pp512 | 671.30 ± 82.75 |
+| qwen2 14B Q4_K - Medium | 8.37 GiB | 14.77 B | CUDA | 30 | tg128 | 15.02 ± 0.06 |
+| qwen2 14B Q4_K - Medium | 8.37 GiB | 14.77 B | CUDA | 40 | pp512 | 100.25 ± 18.01 |
+| qwen2 14B Q4_K - Medium | 8.37 GiB | 14.77 B | CUDA | 40 | tg128 | 5.62 ± 0.20 |
+| qwen2 14B Q4_K - Medium | 8.37 GiB | 14.77 B | CUDA | 50 | pp512 | 51.72 ± 5.07 |
+| qwen2 14B Q4_K - Medium | 8.37 GiB | 14.77 B | CUDA | 50 | tg128 | 1.61 ± 0.11 |`;
 
 export function sampleDataset(): string {
   return SAMPLE;
 }
 
-/** 数据出图面板：左侧栏/命令面板打开，一个自变量 + 一个因变量。 */
+/** 数据出图面板：左侧栏/命令面板打开，一个自变量 + 一个因变量（可选分组）。 */
 export function renderChartHtml(
   webview: vscode.Webview,
   state: ChartPanelState | undefined,
@@ -67,7 +63,7 @@ header .hint { margin-bottom: 14px; }
   gap: 10px; margin-bottom: 8px; font-weight: 600;
 }
 .card-head .actions { display: flex; gap: 6px; align-items: center; }
-textarea { min-height: 88px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; }
+textarea { min-height: 96px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; }
 .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
 .row label { display: flex; flex-direction: column; gap: 3px; min-width: 150px; }
 .row label span { color: var(--vscode-descriptionForeground); font-size: 0.9em; }
@@ -85,10 +81,9 @@ svg.chart { width: 100%; height: auto; display: block; }
 .axis-line { stroke: var(--vscode-descriptionForeground, #999); stroke-width: 1.2; }
 .tick-text { fill: var(--vscode-descriptionForeground, #999); font-size: 12px; }
 .axis-title { fill: var(--vscode-foreground, #ccc); font-size: 13px; font-weight: 500; }
-.series-line { fill: none; stroke: var(--vscode-charts-blue, #3794ff); stroke-width: 2; }
-.series-area { fill: var(--vscode-charts-blue, #3794ff); opacity: 0.18; stroke: none; }
-.series-dot { fill: var(--vscode-charts-blue, #3794ff); }
-.series-bar { fill: var(--vscode-charts-blue, #3794ff); opacity: 0.85; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 0.9em; }
+.legend .item { display: inline-flex; align-items: center; gap: 6px; }
+.legend .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 .tooltip {
   position: absolute; pointer-events: none; display: none; z-index: 5;
   padding: 4px 8px; border-radius: 4px; font-size: 12px; white-space: nowrap;
@@ -104,7 +99,7 @@ svg.chart { width: 100%; height: auto; display: block; }
 <header>
   <h1>数据出图</h1>
   <div class="hint meta">CSV / Markdown 表格 / 直接粘贴都行。选一个自变量（X）和一个因变量（Y），
-  然后挑图型；图不要求 X 单调，也可以按分类画柱状。</div>
+  再挑图型；可以按一列分组画出多条曲线。数值列认得 <code>381.06 ± 92.53</code> 和 <code>8.37 GiB</code> 这种写法。</div>
 </header>
 
 <section class="card">
@@ -116,7 +111,7 @@ svg.chart { width: 100%; height: auto; display: block; }
       <button id="clear" class="ghost">清空</button>
     </div>
   </div>
-  <textarea id="text" placeholder="把 CSV 或 Markdown 表格粘贴到这里，例如：&#10;model,threads,tok/s&#10;qwen,8,12.4&#10;qwen,16,21.7"></textarea>
+  <textarea id="text" placeholder="把 CSV 或 Markdown 表格粘贴到这里，例如：&#10;| model | ngl | t/s |&#10;| --- | --: | ---: |&#10;| qwen2 | 0 | 7.84 ± 0.14 |"></textarea>
   <div class="row" style="margin-top: 8px">
     <button id="parse" class="primary">解析粘贴内容</button>
     <span class="meta" id="sourceInfo">还没有数据</span>
@@ -126,10 +121,11 @@ svg.chart { width: 100%; height: auto; display: block; }
 </section>
 
 <section class="card" id="mappingCard" hidden>
-  <div class="card-head"><span>2. 选列与图型</span><span class="meta">Y 只能选数值列</span></div>
+  <div class="card-head"><span>2. 选列与图型</span><span class="meta">Y 只能选数值列；分组列可选</span></div>
   <div class="row">
     <label><span>自变量 X</span><select id="xSelect"></select></label>
     <label><span>因变量 Y</span><select id="ySelect"></select></label>
+    <label><span>分组列（可选）</span><select id="groupSelect"></select></label>
     <label><span>图型</span>
       <select id="typeSelect">
         <option value="line">折线</option>
@@ -144,7 +140,7 @@ svg.chart { width: 100%; height: auto; display: block; }
         <label style="flex-direction: row; min-width: 0; align-items: center; gap: 6px">
           <input id="sortByX" type="checkbox" style="width: auto" /> 按 X 排序
         </label>
-        <span class="meta">超过 <b id="maxPoints">3000</b> 点自动降采样</span>
+        <span class="meta">每条序列超过 <b id="maxPoints">3000</b> 点自动降采样</span>
       </span>
     </label>
   </div>
@@ -154,15 +150,18 @@ svg.chart { width: 100%; height: auto; display: block; }
   <div class="card-head">
     <span>3. 图</span>
     <div class="actions">
-      <button id="copySvg" class="ghost">复制 SVG</button>
-      <button id="saveSvg" class="ghost">保存 SVG</button>
+      <button id="saveFigure" class="primary">保存图片…</button>
       <button id="saveCsv" class="ghost">导出数据 CSV</button>
     </div>
+  </div>
+  <div class="meta" style="margin-bottom: 6px">
+    图在面板里是 SVG 预览（跟随主题）；导出走 Python + matplotlib，可选 PNG / SVG / PDF。
   </div>
   <div class="chart-box" id="chartBox">
     <svg class="chart" id="chart" viewBox="0 0 900 520" preserveAspectRatio="xMidYMid meet"></svg>
     <div class="tooltip" id="tooltip"></div>
   </div>
+  <div class="legend" id="legend"></div>
   <div class="meta meta-line" id="chartMeta"></div>
 </section>
 
@@ -171,20 +170,21 @@ svg.chart { width: 100%; height: auto; display: block; }
 const vscode = acquireVsCodeApi();
 const initial = JSON.parse(document.getElementById('initial').textContent);
 const $ = (id) => document.getElementById(id);
-let model = null;
 let hoverPoints = [];
 
-function requestRender() {
-  vscode.postMessage({ type: 'render', options: collectOptions() });
-}
-
 function collectOptions() {
+  const group = $('groupSelect').value;
   return {
     xIndex: Number($('xSelect').value),
     yIndex: Number($('ySelect').value),
+    groupIndex: group === '' ? null : Number(group),
     type: $('typeSelect').value,
     sortByX: $('sortByX').checked,
   };
+}
+
+function requestRender() {
+  vscode.postMessage({ type: 'render', options: collectOptions() });
 }
 
 function fillSelect(select, columns, kinds, keep) {
@@ -194,17 +194,32 @@ function fillSelect(select, columns, kinds, keep) {
     if (kinds && !kinds.includes(column.kind)) return;
     const option = document.createElement('option');
     option.value = String(index);
-    option.textContent = column.name + (column.kind === 'number' ? '  #' : '');
+    option.textContent = column.name;
     select.appendChild(option);
   });
   const values = [...select.options].map((option) => Number(option.value));
   if (values.includes(previous)) select.value = String(previous);
 }
 
+function fillGroupSelect(select, columns, keep) {
+  select.replaceChildren();
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '不分组（单条序列）';
+  select.appendChild(none);
+  columns.forEach((column, index) => {
+    const option = document.createElement('option');
+    option.value = String(index);
+    option.textContent = column.name;
+    select.appendChild(option);
+  });
+  if (keep !== null && keep !== undefined && keep >= 0) select.value = String(keep);
+}
+
 function applyDataset(state) {
-  $('sourceInfo').textContent =
-    state.total + ' 行 · ' + state.columns.length + ' 列 · ' + state.format;
+  $('sourceInfo').textContent = state.total + ' 行 · ' + state.columns.length + ' 列 · ' + state.format;
   $('preview').replaceChildren(buildTable(state));
+
   const warnings = $('warnings');
   warnings.replaceChildren();
   if (state.warnings.length) {
@@ -218,6 +233,7 @@ function applyDataset(state) {
 
   fillSelect($('xSelect'), state.columns, null, state.options.xIndex);
   fillSelect($('ySelect'), state.columns, ['number'], state.options.yIndex);
+  fillGroupSelect($('groupSelect'), state.columns, state.options.groupIndex);
   $('typeSelect').value = state.options.type;
   $('sortByX').checked = state.options.sortByX;
   $('maxPoints').textContent = String(state.options.maxPoints);
@@ -239,7 +255,7 @@ function buildTable(state) {
   }
   table.appendChild(head);
 
-  state.preview.forEach((row, rowIndex) => {
+  for (const row of state.preview) {
     const tr = document.createElement('tr');
     row.forEach((cell, columnIndex) => {
       const td = document.createElement('td');
@@ -247,9 +263,8 @@ function buildTable(state) {
       if (state.columns[columnIndex] && state.columns[columnIndex].kind === 'number') td.className = 'num';
       tr.appendChild(td);
     });
-    if (rowIndex === 0) tr.style.opacity = '1';
     table.appendChild(tr);
-  });
+  }
 
   wrap.appendChild(table);
   const note = document.createElement('div');
@@ -287,16 +302,20 @@ function buildSvg(drawing) {
   parts.push('<line class="axis-line" x1="' + plot.left + '" y1="' + plot.bottom + '" x2="' + plot.right + '" y2="' + plot.bottom + '" />');
   parts.push('<line class="axis-line" x1="' + plot.left + '" y1="' + plot.top + '" x2="' + plot.left + '" y2="' + plot.bottom + '" />');
 
-  if (series.area) parts.push('<path class="series-area" d="' + series.area + '" />');
-  if (series.path) parts.push('<path class="series-line" d="' + series.path + '" />');
-  if (type === 'scatter' && series.points) {
-    for (const point of series.points) {
-      parts.push('<circle class="series-dot" cx="' + point.x + '" cy="' + point.y + '" r="2.6" />');
+  for (const line of series) {
+    const color = ' style="stroke:' + line.color + '"';
+    const fill = ' style="fill:' + line.color + '"';
+    if (line.area) parts.push('<path class="series-area" d="' + line.area + '"' + fill + ' />');
+    if (line.path) parts.push('<path class="series-line" d="' + line.path + '"' + color + ' />');
+    if (type === 'scatter' && line.points) {
+      for (const point of line.points) {
+        parts.push('<circle class="series-dot" cx="' + point.x + '" cy="' + point.y + '" r="2.6"' + fill + ' />');
+      }
     }
-  }
-  if (type === 'bar' && series.bars) {
-    for (const bar of series.bars) {
-      parts.push('<rect class="series-bar" x="' + bar.x + '" y="' + bar.y + '" width="' + bar.width + '" height="' + Math.max(0, bar.height) + '" />');
+    if (type === 'bar' && line.bars) {
+      for (const bar of line.bars) {
+        parts.push('<rect class="series-bar" x="' + bar.x + '" y="' + bar.y + '" width="' + bar.width + '" height="' + Math.max(0, bar.height) + '"' + fill + ' />');
+      }
     }
   }
 
@@ -307,16 +326,37 @@ function buildSvg(drawing) {
   return parts.join('');
 }
 
+function renderLegend(legend) {
+  const box = $('legend');
+  box.replaceChildren();
+  if (legend.length <= 1) return;
+  for (const item of legend) {
+    const wrap = document.createElement('span');
+    wrap.className = 'item';
+    const swatch = document.createElement('span');
+    swatch.className = 'swatch';
+    swatch.style.background = item.color;
+    const text = document.createElement('span');
+    text.textContent = item.name;
+    wrap.append(swatch, text);
+    box.appendChild(wrap);
+  }
+}
+
 function renderChart(drawing) {
-  model = drawing;
   $('chart').outerHTML = buildSvg(drawing);
   const svg = document.getElementById('chart');
+
   hoverPoints = [];
-  if (drawing.series.points) hoverPoints = drawing.series.points;
-  if (drawing.series.bars) hoverPoints = drawing.series.bars;
+  for (const line of drawing.series) {
+    if (line.points) hoverPoints = hoverPoints.concat(line.points);
+    if (line.bars) hoverPoints = hoverPoints.concat(line.bars);
+  }
 
   svg.addEventListener('mousemove', (event) => showTooltip(event, svg, drawing));
   svg.addEventListener('mouseleave', () => { $('tooltip').style.display = 'none'; });
+
+  renderLegend(drawing.legend);
 
   const meta = [];
   meta.push(drawing.meta.used + ' / ' + drawing.meta.source + ' 行');
@@ -343,7 +383,8 @@ function showTooltip(event, svg, drawing) {
 
   const box = $('chartBox').getBoundingClientRect();
   const tooltip = $('tooltip');
-  tooltip.textContent = drawing.x.title + ' = ' + best.vx + '  ·  ' + drawing.y.title + ' = ' + best.vy;
+  const prefix = best.series && drawing.legend.length > 1 ? best.series + ' · ' : '';
+  tooltip.textContent = prefix + drawing.x.title + ' = ' + best.vx + '  ·  ' + drawing.y.title + ' = ' + best.vy;
   tooltip.style.display = 'block';
   tooltip.style.left = Math.min(event.clientX - box.left + 12, box.width - tooltip.offsetWidth - 8) + 'px';
   tooltip.style.top = Math.max(0, event.clientY - box.top - 32) + 'px';
@@ -354,26 +395,21 @@ $('openFile').addEventListener('click', () => vscode.postMessage({ type: 'openFi
 $('sample').addEventListener('click', () => vscode.postMessage({ type: 'sample' }));
 $('clear').addEventListener('click', () => {
   $('text').value = '';
-  model = null;
   $('mappingCard').hidden = true;
   $('chartCard').hidden = true;
   $('preview').replaceChildren();
+  $('legend').replaceChildren();
   $('sourceInfo').textContent = '还没有数据';
   $('warnings').replaceChildren();
 });
 
-for (const id of ['xSelect', 'ySelect', 'typeSelect', 'sortByX']) {
+for (const id of ['xSelect', 'ySelect', 'groupSelect', 'typeSelect', 'sortByX']) {
   $(id).addEventListener('change', requestRender);
 }
 
-$('copySvg').addEventListener('click', () => {
-  const svg = document.getElementById('chart');
-  if (svg) vscode.postMessage({ type: 'copySvg', svg: svg.outerHTML });
-});
-$('saveSvg').addEventListener('click', () => {
-  const svg = document.getElementById('chart');
-  if (svg) vscode.postMessage({ type: 'saveSvg', svg: svg.outerHTML });
-});
+$('saveFigure').addEventListener('click', () =>
+  vscode.postMessage({ type: 'saveFigure', options: collectOptions() }),
+);
 $('saveCsv').addEventListener('click', () => vscode.postMessage({ type: 'saveCsv', options: collectOptions() }));
 
 window.addEventListener('message', (event) => {

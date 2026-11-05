@@ -2,7 +2,7 @@
   "name": "syscomtool",
   "displayName": "SysComTool",
   "description": "proj59 辅助工具集：左侧栏搜索功能，内置图形化 llama.cpp 运行器与数据出图",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "publisher": "xuzhaotenfang",
   "license": "MIT",
   "repository": {
@@ -114,6 +114,11 @@
           "minimum": 100,
           "maximum": 20000,
           "description": "出图时最多保留多少数据点，超出按 LTTB 降采样（柱状图按步长抽样）"
+        },
+        "syscomtool.chart.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "导出图片用的 Python 解释器（留空则自动探测 python / py -3 / python3，需要已安装 matplotlib）"
         },
         "syscomtool.update.checkOnStartup": {
           "type": "boolean",
