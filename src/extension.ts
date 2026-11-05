@@ -11,6 +11,7 @@ import { UpdateFlow } from './services/update/updateFlow';
 import { Updater } from './services/update/updater';
 import { FeatureListView } from './views/featureListView';
 import { ChartPanel } from './views/chartPanel';
+import { FormulaPanel } from './views/formulaPanel';
 import { LlamaPanel } from './views/llamaPanel';
 
 const DEFAULT_FEED = 'https://api.github.com/repos/xuzhaotenfang/SysComTool/releases/latest';
@@ -31,6 +32,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const panel = new LlamaPanel({ context, store, runs, logger });
   const chartPanel = new ChartPanel({ context, logger });
+  const formulaPanel = new FormulaPanel({
+    context,
+    logger,
+    openChart: (dataset) => {
+      chartPanel.loadDataset(dataset);
+      chartPanel.show();
+    },
+  });
 
   const updater = new Updater({
     logger,
@@ -49,7 +58,7 @@ export function activate(context: vscode.ExtensionContext): void {
     onUpdateFound: () => sidebar?.refresh(),
   });
 
-  const features = createFeatures({ panel, chartPanel, updateFlow });
+  const features = createFeatures({ panel, chartPanel, formulaPanel, updateFlow });
   const host = new FeatureHost(
     {
       registerCommand: (id, handler) => vscode.commands.registerCommand(id, handler),
@@ -87,6 +96,7 @@ export function activate(context: vscode.ExtensionContext): void {
     { dispose: () => runs.dispose() },
     { dispose: () => panel.dispose() },
     { dispose: () => chartPanel.dispose() },
+    { dispose: () => formulaPanel.dispose() },
     vscode.window.registerWebviewViewProvider(FeatureListView.viewType, sidebar, {
       webviewOptions: { retainContextWhenHidden: true },
     }),
