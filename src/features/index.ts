@@ -1,8 +1,10 @@
 import type { Feature } from '../core/types';
 import type { UpdateFlow } from '../services/update/updateFlow';
 import type { ChartPanel } from '../views/chartPanel';
+import type { FormulaPanel } from '../views/formulaPanel';
 import type { LlamaPanel } from '../views/llamaPanel';
 import { createChartFeature } from './chart';
+import { createFormulaFeature } from './formula';
 import { helloFeature } from './hello';
 import { createLlamaFeature } from './llama';
 import { createUpdateFeature } from './update';
@@ -10,6 +12,7 @@ import { createUpdateFeature } from './update';
 export interface FeatureDeps {
   panel: LlamaPanel;
   chartPanel: ChartPanel;
+  formulaPanel: FormulaPanel;
   updateFlow: UpdateFlow;
 }
 
@@ -26,6 +29,7 @@ export function createFeatures(deps: FeatureDeps): Feature[] {
     helloFeature,
     createLlamaFeature(deps.panel),
     createChartFeature(deps.chartPanel),
+    createFormulaFeature(deps.formulaPanel),
     createUpdateFeature(() => {
       void deps.updateFlow.check({ interactive: true });
     }),

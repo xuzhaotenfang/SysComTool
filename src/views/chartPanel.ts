@@ -53,6 +53,18 @@ export class ChartPanel {
     panel.onDidDispose(() => this.close(), undefined, this.disposables);
   }
 
+  /** 其它面板（如建模计算）把结果直接送进来出图。 */
+  loadDataset(dataset: Dataset): void {
+    this.dataset = dataset;
+    this.deps.logger.info(
+      `出图面板接收数据：${dataset.rows.length} 行 × ${dataset.columns.length} 列`,
+    );
+    const state = this.snapshotState();
+    if (state) {
+      this.post({ type: 'dataset', state });
+    }
+  }
+
   dispose(): void {
     this.panel?.dispose();
     this.close();
